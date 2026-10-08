@@ -188,6 +188,7 @@ impl Plugin for ConsolePlugin {
                         (
                             crate::debug_move::route_debug_move_commands,
                             crate::saved_position::route_saved_position_commands,
+                            crate::debug_cast_model::route_debug_cast_model_commands,
                         ),
                         crate::debug_script_mover::route_debug_script_mover_commands,
                         crate::debug_draw_method::route_debug_draw_method_commands,
@@ -746,6 +747,7 @@ fn setup_console(
     crate::debug_move::register_debug_move_commands(&mut registry);
     crate::saved_position::register_saved_position_commands(&mut registry);
     crate::debug_script_mover::register_debug_script_mover_commands(&mut registry);
+    crate::debug_cast_model::register_debug_cast_model_commands(&mut registry);
     crate::debug_draw_method::register_debug_draw_method_commands(&mut registry);
     crate::debug_view_proj::register_view_proj_commands(&mut registry);
     crate::debug_dof::register(&mut registry);

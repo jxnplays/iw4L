@@ -2258,6 +2258,7 @@ version = "0.1.0"
 dependencies = [
  "asset_core",
  "asset_game",
+ "asset_model",
  "asset_transport",
  "asset_world",
  "assets",
@@ -2276,6 +2277,7 @@ dependencies = [
  "render",
  "render_frontend",
  "render_fx",
+ "render_scene",
  "replay",
  "rfd",
  "session",

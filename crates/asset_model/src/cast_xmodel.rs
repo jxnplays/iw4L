@@ -16,6 +16,7 @@
 use crate::{
     BoneBind, ModelLodSelector, ModelSkel, VertSkin, pack_tex_coords, pack_unit_vec, unpack_color,
 };
+use xmodel_runtime::ModelPoseSrc;
 
 const MAGIC: u32 = 0x7473_6163; // "cast"
 
@@ -311,6 +312,63 @@ struct Surface {
     rigid: bool,
 }
 
+/// Build the rest pose the renderer poses bones from.
+///
+/// A cast bone carries its local transform, so the pose is the file's own
+/// hierarchy rather than a reconstruction: `parent_list` holds each non-root
+/// bone's parent, `trans` its local position, and `base_mat` the bind matrix
+/// per bone. `quats` stays empty — the packed i16 rotation array is a fastfile
+/// encoding with no cast equivalent, and `DObj` only needs the bind matrices.
+fn build_pose(
+    name: &str,
+    bone_names: &[String],
+    bone_parents: &[i32],
+    bones: &[BoneBind],
+) -> Option<ModelPoseSrc> {
+    if bone_names.len() != bones.len() || bones.is_empty() {
+        return None;
+    }
+    // A parent must come before its child, or the hierarchy cannot be built.
+    let mut ordered = vec![false; bones.len()];
+    let mut parent_list = Vec::with_capacity(bones.len());
+    let mut trans = Vec::with_capacity(bones.len());
+    for (index, bind) in bones.iter().enumerate() {
+        let parent = *bone_parents.get(index).unwrap_or(&-1);
+        let is_root = parent < 0;
+        if !is_root {
+            let parent = parent as usize;
+            if parent >= bones.len() || !ordered[parent] {
+                return None;
+            }
+            parent_list.push(u8::try_from(parent).unwrap_or(0));
+        }
+        trans.push(bind.trans);
+        ordered[index] = true;
+    }
+    let base_mat = bones
+        .iter()
+        .map(|bind| {
+            (
+                bevy::math::Quat::from_xyzw(bind.quat[0], bind.quat[1], bind.quat[2], bind.quat[3]),
+                bevy::math::Vec3::from_array(bind.trans),
+            )
+        })
+        .collect();
+    Some(ModelPoseSrc {
+        name: name.to_owned(),
+        num_bones: bones.len(),
+        num_root_bones: bones.len().saturating_sub(parent_list.len()),
+        scale: 1.0,
+        no_scale_part_bits: [0; 6],
+        bone_names: bone_names.to_vec(),
+        parent_list,
+        quats: Vec::new(),
+        trans,
+        base_mat,
+        root_rest: None,
+    })
+}
+
 /// Build one IW4 packed vertex row.
 ///
 /// The layout is fixed by `asset_iw4::vertex_decl` for `PACKED_VERTEX_TYPE`:
@@ -362,12 +420,20 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
     let mut surfaces: Vec<Surface> = Vec::new();
     let mut bone_names: Vec<String> = Vec::new();
     let mut bones: Vec<BoneBind> = Vec::new();
+    let mut bone_parents: Vec<i32> = Vec::new();
 
     let mut visit = |id: u32, node: &Node<'_>| -> Result<(), String> {
         if id == NODE_BONE {
             let position = node.floats("lp", PROP_VECTOR3, 1)?;
             let rotation = node.floats("lr", PROP_VECTOR4, 1)?;
             bone_names.push(node.text("n")?.to_owned());
+            // `p` is the parent bone index, -1 for a root.
+            let parent = node
+                .required("p")?
+                .scalar(PROP_INT32, 1)
+                .map(|data| i32::from_le_bytes([data[0], data[1], data[2], data[3]]))
+                .unwrap_or(-1);
+            bone_parents.push(parent);
             bones.push(BoneBind {
                 quat: [rotation[0], rotation[1], rotation[2], rotation[3]],
                 trans: [position[0], position[1], position[2]],
@@ -485,6 +551,7 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
     if surfaces.is_empty() {
         return Err("cast: no mesh node carried geometry".to_owned());
     }
+    let pose = build_pose(name, &bone_names, &bone_parents, &bones);
 
     let rigid_verts = vert_skin
         .iter()
@@ -530,7 +597,7 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
         tag_view: None,
         tag_weapon: None,
         bones,
-        pose: None,
+        pose,
         positions,
         normals,
         colors,

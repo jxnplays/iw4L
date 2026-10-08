@@ -424,6 +424,41 @@ impl MapXModelSceneCatalog {
         self.resolved
     }
 
+    /// Point every surface of one already-inserted model at a material the
+    /// loaded map has already resolved.
+    ///
+    /// This adds no material. `authored` must be a `MaterialIndex` that came out
+    /// of this catalog's own `resolve_surface_materials`, so the draw resolves
+    /// through the map's material table exactly as a captured model's does. A
+    /// surface left `None` is skipped at draw time, so a caller that cannot
+    /// name a map material gets a skipped model rather than a wrong one.
+    ///
+    /// `surface_count` is the number of rows to write; the caller passes the
+    /// model's surface count because the catalog does not track it separately.
+    pub fn bind_surfaces_to_material(
+        &mut self,
+        key: &MapXModelAssetKey,
+        authored: crate::MaterialIndex,
+        surface_count: usize,
+    ) {
+        if !self.assets.contains_key(key) {
+            return;
+        }
+        self.surface_materials
+            .insert(key.clone(), vec![Some(authored); surface_count]);
+    }
+
+    /// The first material this catalog has already resolved, if any. A caller
+    /// that needs some material the map has, and does not care which, uses
+    /// this rather than inventing one.
+    pub fn first_resolved_material(&self) -> Option<crate::MaterialIndex> {
+        self.surface_materials
+            .values()
+            .flat_map(|row| row.iter())
+            .find_map(Option::as_ref)
+            .copied()
+    }
+
     pub fn surface_material(
         &self,
         key: &MapXModelAssetKey,
