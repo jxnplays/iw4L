@@ -1,4 +1,5 @@
 mod body_catalog;
+pub mod cast_xmodel;
 mod fpv_catalog;
 pub mod link;
 mod model_kind;
