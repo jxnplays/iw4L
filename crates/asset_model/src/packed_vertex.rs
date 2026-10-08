@@ -92,6 +92,67 @@ pub fn unpack_packed_tex_coords(packed: u32) -> [f32; 2] {
     ]
 }
 
+/// The inverse of [`half_to_f32`], with round-to-nearest-even and overflow
+/// saturating to infinity the way a float32->float16 cast does. UVs outside
+/// [-65504, 65504] do not occur, but a value that does not fit must land on a
+/// defined result rather than wrap into a plausible-looking coordinate.
+pub fn f32_to_half(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = ((bits >> 23) & 0xff) as i32;
+    let mantissa = bits & 0x007f_ffff;
+
+    if exponent == 0xff {
+        // Infinity, or NaN with the payload preserved.
+        return sign
+            | 0x7c00
+            | if mantissa == 0 {
+                0
+            } else {
+                0x0200 | (mantissa >> 13) as u16
+            };
+    }
+    let unbiased = exponent - 127;
+    if unbiased > 15 {
+        return sign | 0x7c00;
+    }
+    if unbiased < -24 {
+        // Below the smallest subnormal half; it rounds to signed zero.
+        return sign;
+    }
+    if unbiased < -14 {
+        // Subnormal half: shift the implicit bit back in and rescale.
+        let full = mantissa | 0x0080_0000;
+        let shift = (-14 - unbiased) as u32 + 13;
+        let half_mantissa = (full >> shift) as u16;
+        let remainder = full & ((1u32 << shift) - 1);
+        let halfway = 1u32 << (shift - 1);
+        let rounded = match remainder.cmp(&halfway) {
+            std::cmp::Ordering::Greater => half_mantissa + 1,
+            std::cmp::Ordering::Equal => {
+                // Ties go to the even value.
+                half_mantissa + (half_mantissa & 1)
+            }
+            std::cmp::Ordering::Less => half_mantissa,
+        };
+        return sign | rounded;
+    }
+    let half_exponent = ((unbiased + 15) as u16) << 10;
+    let half_mantissa = (mantissa >> 13) as u16;
+    let remainder = mantissa & 0x1fff;
+    let rounded = match remainder.cmp(&0x1000) {
+        std::cmp::Ordering::Greater => half_mantissa + 1,
+        std::cmp::Ordering::Equal => half_mantissa + (half_mantissa & 1),
+        std::cmp::Ordering::Less => half_mantissa,
+    };
+    sign | half_exponent | rounded
+}
+
+/// Two UVs as the two halves of one packed texcoord, high half first.
+pub fn pack_tex_coords(uv: [f32; 2]) -> u32 {
+    (u32::from(f32_to_half(uv[0])) << 16) | u32::from(f32_to_half(uv[1]))
+}
+
 pub fn unpack_color_u8(packed: u32) -> [u8; 4] {
     let [b, g, r, a] = packed.to_le_bytes();
     [r, g, b, a]

@@ -13,7 +13,9 @@
 //! The container shape was confirmed against Greyhound's `CastExport.cpp`, a
 //! writer for the same format. Nothing of it is copied or linked.
 
-use crate::{BoneBind, ModelLodSelector, ModelSkel, VertSkin, unpack_color};
+use crate::{
+    BoneBind, ModelLodSelector, ModelSkel, VertSkin, pack_tex_coords, pack_unit_vec, unpack_color,
+};
 
 const MAGIC: u32 = 0x7473_6163; // "cast"
 
@@ -309,6 +311,32 @@ struct Surface {
     rigid: bool,
 }
 
+/// Build one IW4 packed vertex row.
+///
+/// The layout is fixed by `asset_iw4::vertex_decl` for `PACKED_VERTEX_TYPE`:
+/// stride 32, position as a float4 at offset 0, colour at 16, the two UVs
+/// packed as halves at 20, and the normal packed as a unit vector at 24. The
+/// normal's scale byte carries the magnitude, so a unit input always reads
+/// back as one.
+fn pack_iw4_vertex(
+    position: [f32; 3],
+    normal: [f32; 3],
+    uv: [f32; 2],
+    color: u32,
+) -> [u8; asset_iw4::size::GFX_PACKED_VERTEX] {
+    let mut row = [0u8; asset_iw4::size::GFX_PACKED_VERTEX];
+    for (offset, value) in [position[0], position[1], position[2], 0.0]
+        .iter()
+        .enumerate()
+    {
+        row[offset * 4..offset * 4 + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    row[16..20].copy_from_slice(&color.to_le_bytes());
+    row[20..24].copy_from_slice(&pack_tex_coords(uv).to_le_bytes());
+    row[24..28].copy_from_slice(&pack_unit_vec(normal).to_le_bytes());
+    row
+}
+
 /// Read one `.cast` file into a single `ModelSkel`: one surface per `mesh`
 /// node under the model, in file order, plus the `skel` bone hierarchy.
 ///
@@ -330,6 +358,7 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
     let mut uvs: Vec<[f32; 2]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut vert_skin: Vec<VertSkin> = Vec::new();
+    let mut packed_vertices: Vec<[u8; asset_iw4::size::GFX_PACKED_VERTEX]> = Vec::new();
     let mut surfaces: Vec<Surface> = Vec::new();
     let mut bone_names: Vec<String> = Vec::new();
     let mut bones: Vec<BoneBind> = Vec::new();
@@ -416,6 +445,29 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
         let index_base = indices.len();
         let first = u32::try_from(vertex_base).unwrap_or(0);
         indices.extend(mesh_indices.iter().map(|&index| first + index));
+        // The packed row is the IW4 vertex the GPU reads back: the same four
+        // values the decoded arrays carry, in the packed layout. W is unused.
+        for vertex in 0..vertex_count {
+            packed_vertices.push(pack_iw4_vertex(
+                [
+                    flat_positions[vertex * 3],
+                    flat_positions[vertex * 3 + 1],
+                    flat_positions[vertex * 3 + 2],
+                ],
+                [
+                    flat_normals[vertex * 3],
+                    flat_normals[vertex * 3 + 1],
+                    flat_normals[vertex * 3 + 2],
+                ],
+                [flat_uvs[vertex * 2], flat_uvs[vertex * 2 + 1]],
+                u32::from_le_bytes([
+                    packed_colors[vertex * 4],
+                    packed_colors[vertex * 4 + 1],
+                    packed_colors[vertex * 4 + 2],
+                    packed_colors[vertex * 4 + 3],
+                ]),
+            ));
+        }
         let rigid = vert_skin[vertex_base..vertex_base + vertex_count]
             .iter()
             .all(|skin| skin.weights[1] == 0.0 && skin.weights[0] == 1.0);
@@ -508,7 +560,7 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
         vert_skin,
         rigid_verts,
         blend_verts,
-        packed_vertices: Vec::new(),
+        packed_vertices,
         radius: Some(radius),
         bounds: Some((mid, half)),
         contents: None,
