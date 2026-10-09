@@ -212,6 +212,56 @@ pub struct SpawnPendingFpvInputs<'w> {
     local: Res<'w, LocalPresentClient>,
 }
 
+/// Catalog name of the NX1 viewmodel. The held view draws this when the
+/// equipped class's payload base is `scar2`. The weapon row is not rewritten.
+const NX1_HELD_VIEW: &str = "nx1_viewmodel_scar2";
+const NX1_VIEW_BONES: usize = 54;
+const NX1_VIEW_SURFACES: usize = 30;
+
+fn class_payload_base_is_scar2(primary: Option<&str>) -> bool {
+    primary
+        .and_then(asset_game::FamilyKey::parse)
+        .is_some_and(|key| key.base == "scar2")
+}
+
+/// The prepared view for the `scar2` row, if its gun resolved to the NX1 mesh.
+///
+/// This is the held view's mesh lookup. Row 591 keeps `viewmodel_m4`.
+pub(crate) fn scar2_held_view(
+    primary: Option<&str>,
+    owners: &FpvOwnerInputs,
+    table: &FpvWeaponTable,
+    epoch: Option<u32>,
+    parent: u32,
+    axis: bool,
+) -> Option<Arc<FpvWeaponView>> {
+    if !class_payload_base_is_scar2(primary) {
+        return None;
+    }
+    let _ = (epoch, parent, axis);
+    let catalog = &owners.meshes.as_ref()?.0;
+    let order = catalog.parsed_model_order(NX1_HELD_VIEW, NX1_VIEW_BONES, NX1_VIEW_SURFACES)?;
+    // Name-only lookup can land on a slot whose surfaces are still the M4.
+    // The posed view has to be the one whose gun index is the parsed cast.
+    let view = table.view_for_order(order)?;
+    let submitted = view.rigs.pick(false, false, false, false, false)?;
+    let (bones, surfaces) = submitted.gun_mesh_shape()?;
+    (bones == NX1_VIEW_BONES && surfaces == NX1_VIEW_SURFACES).then_some(view)
+}
+
+pub(crate) fn held_view_gun_index(
+    primary: Option<&str>,
+    owners: &FpvOwnerInputs,
+    table: &FpvWeaponTable,
+    epoch: Option<u32>,
+    weapon: u32,
+    parent: u32,
+) -> Option<assets::FpvMeshIndex> {
+    scar2_held_view(primary, owners, table, epoch, parent, false)
+        .map(|view| view.gun_index)
+        .or_else(|| table.gun_index(weapon))
+}
+
 pub fn spawn_pending_fpv(
     mut commands: Commands,
     mut pending: ResMut<PendingFpvSpawn>,
@@ -259,9 +309,18 @@ pub fn spawn_pending_fpv(
     }
     session_vm.0 = None;
 
-    if table.catalog_id() != request.catalog_id
-        || table.gun_index(request.weapon_id) != Some(request.gun_index)
-    {
+    let expected_gun = held_view_gun_index(
+        owners
+            .classes
+            .as_ref()
+            .and_then(|c| c.equipped_primary.as_deref()),
+        &owners,
+        table,
+        presented.weapon_epoch(),
+        request.weapon_id,
+        request.parent_weapon,
+    );
+    if table.catalog_id() != request.catalog_id || expected_gun != Some(request.gun_index) {
         let cause = RenderGapCause::FpvGunXModelUnresolved {
             weapon_id: request.weapon_id,
         };
@@ -291,6 +350,19 @@ pub fn spawn_pending_fpv(
             return;
         }
     };
+    // Held view only. The weapon row and its table entry stay on viewmodel_m4.
+    let view = scar2_held_view(
+        owners
+            .classes
+            .as_ref()
+            .and_then(|c| c.equipped_primary.as_deref()),
+        &owners,
+        table,
+        presented.weapon_epoch(),
+        request.parent_weapon,
+        axis,
+    )
+    .unwrap_or(view);
     let Ok(host) = cameras.single() else {
         diag::info!(
             Fpv,
@@ -616,9 +688,51 @@ pub fn tick_fpv_viewmodel(
         if weapon != 0
             && (weapon != session.weapon_id || ps.weapon_primary != session.parent_weapon)
         {
-            if let Some(table) = table {
-                match table.gun_index(weapon) {
+            // Do not write weapon 591's slot back over the scar2 view in this frame.
+            if scar2_held_view(
+                owners
+                    .classes
+                    .as_ref()
+                    .and_then(|c| c.equipped_primary.as_deref()),
+                &owners,
+                table.unwrap_or(&session.table),
+                presented.weapon_epoch(),
+                ps.weapon_primary,
+                session.axis,
+            )
+            .is_some()
+            {
+                session.weapon_id = weapon;
+                session.parent_weapon = ps.weapon_primary;
+            } else if let Some(table) = table {
+                match held_view_gun_index(
+                    owners
+            .classes
+            .as_ref()
+            .and_then(|c| c.equipped_primary.as_deref()),
+                    &owners,
+                    table,
+                    presented.weapon_epoch(),
+                    weapon,
+                    ps.weapon_primary,
+                ) {
                     Some(gun_index) if gun_index == session.fpv.gun_index => {
+                        if scar2_held_view(
+                            owners
+            .classes
+            .as_ref()
+            .and_then(|c| c.equipped_primary.as_deref()),
+                            &owners,
+                            table,
+                            presented.weapon_epoch(),
+                            ps.weapon_primary,
+                            session.axis,
+                        )
+                        .is_some_and(|view| view.gun_index == gun_index)
+                        {
+                            session.weapon_id = weapon;
+                            session.parent_weapon = ps.weapon_primary;
+                        } else {
                         let handles =
                             owners.handles(presented.weapon_epoch(), weapon, ps.weapon_primary);
                         let next = owners.bind(table).and_then(|bound| {
@@ -659,6 +773,7 @@ pub fn tick_fpv_viewmodel(
                             });
                             product.kind = FpvPoseKind::Hide;
                             return;
+                        }
                         }
                     }
                     Some(gun_index) => {
@@ -848,6 +963,102 @@ pub fn tick_fpv_viewmodel(
     product.kind = kind;
 }
 
+/// Keep the hands draws already installed and add the parsed cast's surfaces
+/// onto that plan. The gun shares the view matrix. No material is allocated:
+/// the draws reuse a pass the hands plan already holds.
+fn append_parsed_gun(
+    plan: &mut crate::FpvDrawPlan,
+    rig: &PreparedFpvRig,
+    pose: &crate::anim::fpv_rig::FpvHandPose,
+    skel: &asset_model::ModelSkel,
+) -> Option<u32> {
+    if skel.name != NX1_HELD_VIEW
+        || skel.bones.len() != NX1_VIEW_BONES
+        || skel.surface_index_ranges.len() != NX1_VIEW_SURFACES
+        || skel.packed_vertices.is_empty()
+        || skel.indices.is_empty()
+        || plan.materials.is_empty()
+        || rig.is_dual()
+    {
+        return None;
+    }
+    let hands_draws = plan.hands_plan_n.unwrap_or(0) as usize;
+    if hands_draws == 0 {
+        return None;
+    }
+    let (gun_indices, gun_ranges, gun_rows) = rig.parsed_gun_rows(pose, skel)?;
+    if gun_ranges.len() != NX1_VIEW_SURFACES || gun_rows.is_empty() {
+        return None;
+    }
+    let (hands_indices, hands_verts) = rig.hands_span()?;
+    if hands_indices > plan.indices.len()
+        || hands_draws > plan.draws.len()
+        || hands_draws > plan.surface_ranges.len()
+    {
+        return None;
+    }
+    let hands_end = plan.surface_ranges[..hands_draws]
+        .iter()
+        .map(|(start, count)| start.saturating_add(*count))
+        .max()
+        .unwrap_or(0) as usize;
+    if hands_end > hands_indices {
+        return None;
+    }
+    let asset_world::PackedVertexPayload::Iw4(rows) = &plan.packed_vertices else {
+        return None;
+    };
+    if hands_verts > rows.len() {
+        return None;
+    }
+    let vert_base = u32::try_from(hands_verts).ok()?;
+    let index_base = u32::try_from(hands_indices).ok()?;
+    if gun_indices
+        .iter()
+        .any(|index| index.checked_add(vert_base).is_none())
+    {
+        return None;
+    }
+    for &(start, count) in &gun_ranges {
+        let end = start.checked_add(count)?;
+        if end as usize > gun_indices.len() || index_base.checked_add(start).is_none() {
+            return None;
+        }
+    }
+
+    plan.indices.truncate(hands_indices);
+    plan.surface_ranges.truncate(hands_draws);
+    plan.draws.truncate(hands_draws);
+    let asset_world::PackedVertexPayload::Iw4(rows) = &mut plan.packed_vertices else {
+        return None;
+    };
+    rows.truncate(hands_verts);
+    rows.extend_from_slice(&gun_rows);
+    plan.decoded_n = rows.len();
+    plan.indices
+        .extend(gun_indices.iter().map(|index| index + vert_base));
+    for &(start, count) in &gun_ranges {
+        let surface = plan.surface_ranges.len() as u32;
+        plan.surface_ranges.push((index_base + start, count));
+        plan.draws.push(crate::FpvSurfaceDraw {
+            surface,
+            material: 0,
+            is_scope: false,
+        });
+    }
+    let gun_n = plan.draws.len().saturating_sub(hands_draws) as u32;
+    plan.gun_plan_n = Some(gun_n);
+    plan.plan_draw_n = Some(plan.draws.len() as u32);
+    let claimed = gun_n == NX1_VIEW_SURFACES as u32;
+    plan.revisions.bump_surfaces();
+    plan.revisions.bump_vertices();
+    let topology =
+        crate::topology_fingerprint(&plan.indices, &plan.surface_ranges, plan.decoded_n);
+    plan.revision = crate::stamp_plan_geometry(&mut plan.revisions, plan.revision, topology);
+    plan.geometry_ok = !plan.draws.is_empty();
+    claimed.then_some(gun_n)
+}
+
 /// Write this frame's vertices into the buffer the rig published, and nothing
 /// else: indices, surface ranges, materials and draws belong to the composition.
 fn skin_fpv_geometry(
@@ -896,7 +1107,44 @@ fn skin_fpv_geometry(
                 crate::clear_fpv_draw_plan(&mut fpv_plan, handle);
                 return;
             }
-            if fpv_plan.rig_generation != rig.generation() || fpv_plan.camo != product.camo {
+            let scar2 = class_payload_base_is_scar2(
+                owners
+                    .classes
+                    .as_ref()
+                    .and_then(|c| c.equipped_primary.as_deref()),
+            );
+            let equipped = session.map(|session| session.weapon_id).unwrap_or(0);
+            // Slot 0 was the sidearm, so that test submitted the cast on the
+            // pistol and left the rifle on viewmodel_m4. The primary that sent
+            // `m4` is the weapon named m4, not a weapons[] slot.
+            let sent_m4 = owners.weapons.as_ref().is_some_and(|weapons| {
+                let name = weapons.registry().name_of(equipped);
+                name == "m4" || name == "m4_mp"
+            });
+            let submit_nx1 = scar2 && sent_m4;
+            if equipped != 0 {
+                static SEEN: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+                let mut seen = SEEN.lock().unwrap_or_else(|poison| poison.into_inner());
+                if !seen.contains(&equipped) {
+                    seen.push(equipped);
+                    let name = owners
+                        .weapons
+                        .as_ref()
+                        .map(|weapons| weapons.registry().name_of(equipped))
+                        .unwrap_or("");
+                    let scar2_bit = u8::from(scar2);
+                    let sent_bit = u8::from(sent_m4);
+                    let submit_bit = u8::from(submit_nx1);
+                    diag::info!(
+                        Fpv,
+                        "fpv gate: weapon={equipped} name={name} scar2={scar2_bit} sent_m4={sent_bit} submit={submit_bit}"
+                    );
+                }
+            }
+            if submit_nx1
+                || fpv_plan.rig_generation != rig.generation()
+                || fpv_plan.camo != product.camo
+            {
                 let camo = session.and_then(|session| session.view.camo(product.camo));
                 crate::install_prepared_fpv_plan(
                     &mut fpv_plan,
@@ -911,6 +1159,63 @@ fn skin_fpv_geometry(
                 if !rig.skin_into(&frame.poses, rows) {
                     crate::clear_fpv_draw_plan(&mut fpv_plan, handle);
                     return;
+                }
+            }
+            // Hands are already in the plan. The parsed gun is added onto that
+            // plan, parented to the same view. It is not swapped in for the hands.
+            let written_gun = if submit_nx1 {
+                fpv_meshes.as_ref().and_then(|meshes| {
+                    let order = meshes.0.parsed_model_order(
+                        NX1_HELD_VIEW,
+                        NX1_VIEW_BONES,
+                        NX1_VIEW_SURFACES,
+                    )?;
+                    let skel = &meshes.0.get_at(order)?.skel;
+                    let pose = frame.poses[0].as_ref()?;
+                    append_parsed_gun(&mut fpv_plan, rig, pose, skel)
+                })
+            } else {
+                None
+            };
+            if scar2 && session.is_some_and(|session| session.weapon_id == 591) {
+                static LOGGED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    let session = session.unwrap();
+                    let meshes = fpv_meshes.as_ref().map(|meshes| &meshes.0);
+                    let gun_name = session
+                        .table
+                        .gun_index(591)
+                        .and_then(|index| meshes.and_then(|catalog| catalog.name_at(index.order())))
+                        .unwrap_or("<unresolved>");
+                    let named = owners
+                        .weapons
+                        .as_ref()
+                        .and_then(|weapons| weapons.registry().gun_xmodel_of(591))
+                        .unwrap_or("<none>");
+                    let override_name = meshes
+                        .and_then(|catalog| {
+                            catalog.parsed_model_order(
+                                NX1_HELD_VIEW,
+                                NX1_VIEW_BONES,
+                                NX1_VIEW_SURFACES,
+                            )
+                        })
+                        .and_then(|order| meshes.and_then(|catalog| catalog.name_at(order)))
+                        .unwrap_or("<missing>");
+                    let surfaces = fpv_plan.gun_plan_n.unwrap_or(0) as usize;
+                    let (skin, bones) = if written_gun == Some(NX1_VIEW_SURFACES as u32) {
+                        (NX1_HELD_VIEW, NX1_VIEW_BONES)
+                    } else {
+                        (
+                            rig.gun_mesh_name().unwrap_or("<unread>"),
+                            rig.gun_mesh_shape().map(|(bones, _)| bones).unwrap_or(0),
+                        )
+                    };
+                    diag::info!(
+                        Fpv,
+                        "fpv table: weapon=591 gun_xmodel={gun_name} row_gun_xmodel={named} override={override_name} skin={skin} bones={bones} surfaces={surfaces}"
+                    );
                 }
             }
             fpv_plan.revisions.bump_vertices();
