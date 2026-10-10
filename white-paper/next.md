@@ -11,3 +11,8 @@ scar2 material slot reachability; result: reached.
 plan_material_color_maps invocation check; result: not invoked after registration.
 NamespaceTrees indexing check; result: indexes main\.
 game_main_for_zone derivation check; result: derives main\ correctly.
+14: the map is told `m4` for the scar2 class because its GSC faults on unknown weapon names, so it reports weapon 591 back; clips, sounds, and the gun mesh were all being read off the m4 row.
+15: WeaponRegistry::nx1_scar2_row_of redirects those reads onto the scar2 row when the equipped class names it; the m4 name test in the fpv submit gate is gone.
+16: no public way to insert a synthetic weapon row, so the redirect itself is not unit tested; crates/asset_game/tests/nx1_scar2.rs covers the category mapping and the primary parse it depends on.
+17: NX1 .cast anims are still unbound: read_cast_xmodel yields one rest pose, no animation tracks.
+18: the 9 scar2 WAVs in nx1_scar2_sounds.iwd are still unbound: the .iwd reader indexes images/*.iwi only, and sounds resolve from zone soundbanks.

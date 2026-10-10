@@ -1547,6 +1547,13 @@ impl Default for WeaponRow {
     }
 }
 
+/// Registry base name of the NX1 SCAR Mod 2 row.
+///
+/// Shared by the registration below and by [`WeaponRegistry::nx1_scar2_row_of`],
+/// which redirects the local weapon lookups onto that row when the equipped
+/// class names it.
+pub const NX1_SCAR2_BASE: &str = "scar2";
+
 #[derive(Clone, Debug)]
 pub struct WeaponRegistry {
     rows: Vec<WeaponRow>,
@@ -1636,7 +1643,7 @@ impl WeaponRegistry {
         hands_name: &str,
         world_name: &str,
     ) -> Option<u32> {
-        if self.rows.iter().any(|row| row.name == "scar2") {
+        if self.rows.iter().any(|row| row.name == NX1_SCAR2_BASE) {
             return None;
         }
         // Found by `row.name`, not by an assumed key: a scan of the live registry
@@ -1653,11 +1660,13 @@ impl WeaponRegistry {
         // weapon under the NX1 category rather than inheriting the donor's.
         const NX1_ITEM_GROUP: &str = "weapon_nx1";
         let item_group = NX1_ITEM_GROUP.to_owned();
-        self.item_groups
-            .insert((crate::AssetNamespace::Iw4, "scar2".to_owned()), item_group.clone());
+        self.item_groups.insert(
+            (crate::AssetNamespace::Iw4, NX1_SCAR2_BASE.to_owned()),
+            item_group.clone(),
+        );
         let mut row = self.rows[donor].clone();
 
-        row.name = "scar2".to_owned();
+        row.name = NX1_SCAR2_BASE.to_owned();
         // The class picker labels from this key. A literal rather than a
         // localized token, because NX1 has no string table in this tree.
         row.display_name_key = Some("SCAR Mod 2".to_owned());
@@ -1677,16 +1686,19 @@ impl WeaponRegistry {
 
         let index = u32::try_from(self.rows.len()).ok()?;
         self.rows.push(row);
-        self.by_name.insert("scar2".to_owned(), index);
+        self.by_name.insert(NX1_SCAR2_BASE.to_owned(), index);
         self.by_namespaced
-            .insert((crate::AssetNamespace::Iw4, "scar2".to_owned()), index);
+            .insert((crate::AssetNamespace::Iw4, NX1_SCAR2_BASE.to_owned()), index);
 
         // The family is constructed, not copied: `weapon_families()` is empty at
         // match load, so there is no SCAR-H family to read fields from, and `slot`
         // is otherwise derived from a per-namespace schema that is not populated
         // at this point. It is set explicitly for that reason.
         self.families.insert(crate::weapon_families::WeaponFamily {
-            key: crate::weapon_families::FamilyKey::new(crate::AssetNamespace::Iw4, "scar2"),
+            key: crate::weapon_families::FamilyKey::new(
+                crate::AssetNamespace::Iw4,
+                NX1_SCAR2_BASE,
+            ),
             item_group,
             category: Some(crate::CacAuthoredCategory::Nx1),
             slot: crate::FamilySlot::Primary,

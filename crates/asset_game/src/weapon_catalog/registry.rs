@@ -773,6 +773,32 @@ impl WeaponRegistry {
             .and_then(|row| row.gun_xmodel.as_deref())
     }
 
+    /// The row an equipped class primary names, when that primary is `scar2`.
+    ///
+    /// The map's class-selection GSC resolves `weaponSetups[*].weapon` against
+    /// weapon names it already knows and faults `Field(UnknownName)` on anything
+    /// else, so the class payload sends `m4` for the NX1 SCAR Mod 2 row. The map
+    /// therefore reports weapon 591 (`m4`) back on every event, and the local
+    /// playerstate carries 591 as the held weapon. Reading clips, sounds, or the
+    /// gun mesh off that index yields the M4's data, not SCAR2's.
+    ///
+    /// This maps the equipped primary's own row instead, so those reads come
+    /// from the `scar2` row: its NX1 meshes, and the donor `sz_xanims` and sound
+    /// aliases that row was cloned with. The map still speaks `m4`; only the
+    /// local lookups are redirected.
+    ///
+    /// Returns `None` for every other primary, and for a `scar2` primary that
+    /// has no row, so callers fall through to the reported weapon unchanged.
+    pub fn nx1_scar2_row_of(&self, equipped_primary: Option<&str>) -> Option<u32> {
+        let primary = equipped_primary?;
+        let key = crate::weapon_families::FamilyKey::parse(primary)?;
+        if key.base != NX1_SCAR2_BASE {
+            return None;
+        }
+        let index = self.by_namespaced.get(&(key.namespace, key.base.clone()))?;
+        (*index != 0).then_some(*index)
+    }
+
     pub fn world_model_of(&self, index: u32) -> Option<&str> {
         self.rows
             .get(index as usize)

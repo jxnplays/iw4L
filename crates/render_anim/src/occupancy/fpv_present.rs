@@ -221,7 +221,27 @@ const NX1_VIEW_SURFACES: usize = 30;
 fn class_payload_base_is_scar2(primary: Option<&str>) -> bool {
     primary
         .and_then(asset_game::FamilyKey::parse)
-        .is_some_and(|key| key.base == "scar2")
+        .is_some_and(|key| key.base == asset_game::NX1_SCAR2_BASE)
+}
+
+/// The weapon row the local held view should read, given what the map reported.
+///
+/// The map is told `m4` for this class because its GSC faults on unknown weapon
+/// names, so it reports weapon 591 back. The clips, sounds, and gun mesh have to
+/// come from the `scar2` row instead. See [`WeaponRegistry::nx1_scar2_row_of`].
+fn held_weapon_row(reported: u32, owners: &FpvOwnerInputs) -> u32 {
+    owners
+        .weapons
+        .as_ref()
+        .and_then(|weapons| {
+            weapons.registry().nx1_scar2_row_of(
+                owners
+                    .classes
+                    .as_ref()
+                    .and_then(|c| c.equipped_primary.as_deref()),
+            )
+        })
+        .unwrap_or(reported)
 }
 
 /// The prepared view for the `scar2` row, if its gun resolved to the NX1 mesh.
@@ -682,9 +702,14 @@ pub fn tick_fpv_viewmodel(
     };
 
     if let Some(ps) = presented.viewweapon_player(local.0) {
-        let weapon = table.map_or(get_viewmodel_weapon_index(ps), |t| {
-            fpv_viewmodel_weapon(ps, t)
-        });
+        // Read the row the equipped class names, not the one the map reported.
+        // The map sends `m4` for this class, so `weapon` is 591 unless redirected.
+        let weapon = held_weapon_row(
+            table.map_or(get_viewmodel_weapon_index(ps), |t| {
+                fpv_viewmodel_weapon(ps, t)
+            }),
+            &owners,
+        );
         if weapon != 0
             && (weapon != session.weapon_id || ps.weapon_primary != session.parent_weapon)
         {
@@ -1114,14 +1139,13 @@ fn skin_fpv_geometry(
                     .and_then(|c| c.equipped_primary.as_deref()),
             );
             let equipped = session.map(|session| session.weapon_id).unwrap_or(0);
-            // Slot 0 was the sidearm, so that test submitted the cast on the
-            // pistol and left the rifle on viewmodel_m4. The primary that sent
-            // `m4` is the weapon named m4, not a weapons[] slot.
-            let sent_m4 = owners.weapons.as_ref().is_some_and(|weapons| {
-                let name = weapons.registry().name_of(equipped);
-                name == "m4" || name == "m4_mp"
-            });
-            let submit_nx1 = scar2 && sent_m4;
+            // The held view draws the NX1 cast whenever the equipped class names
+            // `scar2`. This used to also require the equipped weapon to be named
+            // `m4`, which held only because the map reports the stand-in weapon
+            // for this class. Now that the session's weapon id is redirected onto
+            // the `scar2` row, the row's own NX1 meshes are what the rig holds
+            // and no name test is needed: this is the fallback's last gate.
+            let submit_nx1 = scar2;
             if equipped != 0 {
                 static SEEN: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
                 let mut seen = SEEN.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -1133,11 +1157,10 @@ fn skin_fpv_geometry(
                         .map(|weapons| weapons.registry().name_of(equipped))
                         .unwrap_or("");
                     let scar2_bit = u8::from(scar2);
-                    let sent_bit = u8::from(sent_m4);
                     let submit_bit = u8::from(submit_nx1);
                     diag::info!(
                         Fpv,
-                        "fpv gate: weapon={equipped} name={name} scar2={scar2_bit} sent_m4={sent_bit} submit={submit_bit}"
+                        "fpv gate: weapon={equipped} name={name} scar2={scar2_bit} submit={submit_bit}"
                     );
                 }
             }
@@ -1177,7 +1200,7 @@ fn skin_fpv_geometry(
             } else {
                 None
             };
-            if scar2 && session.is_some_and(|session| session.weapon_id == 591) {
+            if scar2 && equipped != 0 {
                 static LOGGED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
                 if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -1185,13 +1208,13 @@ fn skin_fpv_geometry(
                     let meshes = fpv_meshes.as_ref().map(|meshes| &meshes.0);
                     let gun_name = session
                         .table
-                        .gun_index(591)
+                        .gun_index(equipped)
                         .and_then(|index| meshes.and_then(|catalog| catalog.name_at(index.order())))
                         .unwrap_or("<unresolved>");
                     let named = owners
                         .weapons
                         .as_ref()
-                        .and_then(|weapons| weapons.registry().gun_xmodel_of(591))
+                        .and_then(|weapons| weapons.registry().gun_xmodel_of(equipped))
                         .unwrap_or("<none>");
                     let override_name = meshes
                         .and_then(|catalog| {
@@ -1214,7 +1237,7 @@ fn skin_fpv_geometry(
                     };
                     diag::info!(
                         Fpv,
-                        "fpv table: weapon=591 gun_xmodel={gun_name} row_gun_xmodel={named} override={override_name} skin={skin} bones={bones} surfaces={surfaces}"
+                        "fpv table: weapon={equipped} gun_xmodel={gun_name} row_gun_xmodel={named} override={override_name} skin={skin} bones={bones} surfaces={surfaces}"
                     );
                 }
             }

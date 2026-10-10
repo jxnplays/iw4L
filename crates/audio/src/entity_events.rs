@@ -101,6 +101,7 @@ fn entity_event_sound(
     generation: Res<frame::WorldGeneration>,
     weapons: Option<Res<PreparedWeapons>>,
     bank: Option<Res<SoundBank>>,
+    classes: Option<Res<frame::HostClassLoadouts>>,
     adopted: Option<Res<net::LastAdoptedSnapshot>>,
     mut output: MessageWriter<WeaponSound>,
     mut play: MessageWriter<crate::AliasCommand>,
@@ -173,11 +174,23 @@ fn entity_event_sound(
         );
         return;
     };
-    if weapons
-        .registry()
-        .sounds_of(sound.event.payload.weapon)
-        .is_none()
-    {
+    // The map is told `m4` for the NX1 SCAR Mod 2 class, so the reported weapon
+    // is the stand-in row. Read the row the equipped class names so the aliases
+    // come from SCAR2. See `WeaponRegistry::nx1_scar2_row_of`.
+    let reported = sound.event.payload.weapon;
+    let weapon = if player_view {
+        classes
+            .as_deref()
+            .and_then(|classes| {
+                weapons
+                    .registry()
+                    .nx1_scar2_row_of(classes.equipped_primary.as_deref())
+            })
+            .unwrap_or(reported)
+    } else {
+        reported
+    };
+    if weapons.registry().sounds_of(weapon).is_none() {
         diag::warn!(
             Audio,
             "audio: entity sound weapon is unavailable (typed gap)"
@@ -190,7 +203,7 @@ fn entity_event_sound(
         && weapons
             .registry()
             .authored_weapon_sound(
-                sound.event.payload.weapon,
+                weapon,
                 if player_view {
                     WeaponSoundSlot::FirePlayer
                 } else {
@@ -205,7 +218,7 @@ fn entity_event_sound(
         selected_alias(
             &weapons.registry(),
             &bank.0,
-            sound.event.payload.weapon,
+            weapon,
             event,
             player_view,
             sound.event.payload.event_parm == 1,
