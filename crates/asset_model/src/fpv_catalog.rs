@@ -497,6 +497,20 @@ impl FpvMeshCatalog {
         self.entries.len()
     }
 
+    /// Index of the parsed cast, identified by shape as well as name.
+    ///
+    /// A name hit whose skeleton is not this shape is a different mesh stored
+    /// under the label, and must not be submitted as the first-person gun.
+    pub fn parsed_model_order(&self, name: &str, bones: usize, surfaces: usize) -> Option<usize> {
+        (0..self.entries.len()).find(|&index| {
+            self.entries.get(index).is_some_and(|entry| {
+                entry.skel.name == name
+                    && entry.skel.bones.len() == bones
+                    && entry.skel.surface_index_ranges.len() == surfaces
+            })
+        })
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

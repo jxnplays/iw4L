@@ -155,6 +155,10 @@ pub(crate) fn sync_host_class_loadouts(
     if !store.is_changed() {
         return;
     }
+    host.equipped_primary = store
+        .equipped
+        .and_then(|index| store.slots.get(index))
+        .map(|slot| slot.primary.clone());
     host.slots = store.slots.iter().map(HostClassSlot::from).collect();
 }
 

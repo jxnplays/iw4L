@@ -399,6 +399,18 @@ pub(crate) fn t5_class_response(class: crate::ClassId) -> Option<String> {
 }
 
 const IW4_STAND_INS: [&str; 4] = ["m4_mp", "usp_mp", "frag_grenade_mp", "flash_grenade_mp"];
+
+/// The name the NX1 SCAR Mod 2 row's class payload declares to the map.
+///
+/// `weaponSetups[*].weapon` is an enum whose members are *unsuffixed* weapon
+/// bases, not the `_mp` names `asset_key()` produces. Slot 1 proves it: it
+/// commits `usp`, not `usp_mp`. So `scar2_mp` was rejected at commit, and so was
+/// `m4_mp` — the M4's enum member is `m4`.
+///
+/// Only this string changes, and only on the `scar2` branch. The held weapon id
+/// stays on the `scar2` row, so `gun_xmodel_edge_of` still resolves
+/// `nx1_viewmodel_scar2` and the rig draws the NX1 viewmodel and hands.
+const NX1_SEND_AS: &str = "m4";
 const T5_STAND_INS: [&str; 4] = ["ak47_mp", "m1911_mp", "frag_grenade_mp", "flash_grenade_mp"];
 
 pub(crate) fn stand_in_for(world: &mut World, slot: usize, weapon: u32) -> Option<u32> {
@@ -832,7 +844,35 @@ fn class_profile_data(world: &mut World, class: &crate::ClassDef) -> Vec<(Vec<Va
     for (setup_index, weapon) in weapons.into_iter().enumerate() {
         let (base, attachments) = setup(weapon);
         let key = format!("{prefix}.weaponSetups.{setup_index}");
-        put(format!("{key}.weapon"), &base);
+        // The map's class-selection GSC resolves each setup against weapon names
+        // it already knows, and faults `Field(UnknownName)` then calls
+        // `exitLevel` on any name it does not. `scar2` is a row this tree
+        // synthesised, so its `scar2_mp` is unknowable to the script. The class
+        // payload therefore declares `m4_mp` for that row alone.
+        //
+        // `base` is matched *after* the `_mp` suffix is stripped, which is what
+        // `setup` produces for a row with no zone-sourced weapon setup. An
+        // earlier revision compared against `scar2_mp` and never matched, so
+        // the map was still handed `scar2_mp` and faulted on the same lookup.
+        //
+        // Only this string changes. The held weapon id stays on the `scar2` row,
+        // so `gun_xmodel_edge_of` still resolves `nx1_viewmodel_scar2` and the
+        // rig draws the NX1 viewmodel and hands. Every other weapon sends its
+        // own name, untouched.
+        let is_nx1 = base == "scar2";
+        // Diagnostic: the comparison above has now missed twice, so log what it
+        // actually sees rather than infer it. Reports the setup index, the base
+        // string that was compared, and which branch ran.
+        diag::info!(
+            Sim,
+            "nx1 class payload: setup={setup_index} base={base:?} scar2_branch={is_nx1} sent={}",
+            if is_nx1 { NX1_SEND_AS } else { base.as_str() }
+        );
+        if is_nx1 {
+            put(format!("{key}.weapon"), NX1_SEND_AS);
+        } else {
+            put(format!("{key}.weapon"), &base);
+        }
         put(format!("{key}.attachment.0"), &attachments[0]);
         put(format!("{key}.attachment.1"), &attachments[1]);
         let camo = class.camos.get(setup_index).copied().unwrap_or(0);

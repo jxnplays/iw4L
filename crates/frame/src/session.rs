@@ -318,6 +318,9 @@ impl ViewSubject {
 #[derive(Resource, Clone, Debug, PartialEq, Eq)]
 pub struct HostClassLoadouts {
     pub slots: Vec<HostClassSlot>,
+    /// Primary key of the equipped class, `iw4:weapon/scar2_mp` form.
+    /// The held view reads this. It is not a weapon-row field.
+    pub equipped_primary: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -343,6 +346,7 @@ impl Default for HostClassLoadouts {
                 .take(5)
                 .map(HostClassSlot::from)
                 .collect(),
+            equipped_primary: None,
         }
     }
 }

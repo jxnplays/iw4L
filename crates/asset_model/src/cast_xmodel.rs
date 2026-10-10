@@ -1,4 +1,4 @@
-//! NX1 `.cast` meshes into one `ModelSkel`.
+﻿//! NX1 `.cast` meshes into one `ModelSkel`.
 //!
 //! A `.cast` file is the CryEngine chunked container, not a fastfile: magic
 //! `cast`, then a `root` node holding `meta` and `modl` children. A node is a
@@ -14,7 +14,7 @@
 //! writer for the same format. Nothing of it is copied or linked.
 
 use crate::{
-    BoneBind, ModelLodSelector, ModelSkel, VertSkin, pack_tex_coords, pack_unit_vec, unpack_color,
+    BoneBind, ModelSkel, VertSkin, pack_tex_coords, pack_unit_vec, unpack_color,
 };
 use xmodel_runtime::ModelPoseSrc;
 
@@ -22,6 +22,23 @@ const MAGIC: u32 = 0x7473_6163; // "cast"
 
 const NODE_MESH: u32 = 0x6873_656d; // "mesh"
 const NODE_BONE: u32 = 0x656e_6f62; // "bone"
+
+/// Cast units are centimetres; IW4 world units are inches.
+///
+/// Measured, not assumed. Parent-to-child offsets in
+/// `viewhands_nx_us_army_LOD0.cast`, against textbook adult dimensions:
+/// `j_index_le_1` (index proximal phalanx) 4.4717 against 4.5 cm, ratio 1.006;
+/// `j_index_le_2` (middle phalanx) 3.0915 against 3.0 cm, ratio 0.970;
+/// `j_elbow_le` (upper arm) 30.7145 against 33 cm, ratio 1.074; `j_wrist_le`
+/// (forearm) 29.3882 against 26 cm, ratio 0.885; and `tag_view` at 152.4000,
+/// which is 1.524 m, exactly five feet, the conventional view height. Every
+/// ratio is 1.0 to within the spread of human proportions, so a cast unit is
+/// 1.006 cm and the file is in centimetres. Read as inches instead, `j_index_le_1`
+/// would be 11 cm of finger.
+///
+/// The reciprocal is exact by definition, so the constant is the definition of
+/// an inch and not another fitted number.
+const CAST_TO_WORLD: f32 = 1.0 / 2.54;
 
 /// Property ids. Scalars are one character; vectors are the multi-character
 /// constants `'v2'`, `'v3'`, `'v4'`, which land little-endian as `2v`, `3v`.
@@ -315,10 +332,21 @@ struct Surface {
 /// Build the rest pose the renderer poses bones from.
 ///
 /// A cast bone carries its local transform, so the pose is the file's own
-/// hierarchy rather than a reconstruction: `parent_list` holds each non-root
-/// bone's parent, `trans` its local position, and `base_mat` the bind matrix
-/// per bone. `quats` stays empty — the packed i16 rotation array is a fastfile
-/// encoding with no cast equivalent, and `DObj` only needs the bind matrices.
+/// hierarchy rather than a reconstruction.
+///
+/// `DObj` reads three of these arrays by *child* index â€” `bone - num_root_bones`
+/// â€” and `base_mat` by bone index. Bones are therefore emitted roots first, and
+/// `parent_list`, `quats` and `trans` carry one entry per non-root bone.
+///
+/// `parent_list` is a step, not an absolute index: `DObj` recovers the parent as
+/// `bone - step` and refuses a step of zero, so a bone directly under its own
+/// parent is a step of 1. Writing the absolute parent there, as an earlier
+/// version of this did, is what made `DObj::build` report a parent step escaping
+/// the skeleton.
+///
+/// `quats` is the same packed i16 xyzw the fastfile stores, each component scaled
+/// by 32767. The cast rotation is already a unit quaternion in that order, so it
+/// quantises rather than converts.
 fn build_pose(
     name: &str,
     bone_names: &[String],
@@ -328,45 +356,107 @@ fn build_pose(
     if bone_names.len() != bones.len() || bones.is_empty() {
         return None;
     }
-    // A parent must come before its child, or the hierarchy cannot be built.
-    let mut ordered = vec![false; bones.len()];
-    let mut parent_list = Vec::with_capacity(bones.len());
-    let mut trans = Vec::with_capacity(bones.len());
-    for (index, bind) in bones.iter().enumerate() {
-        let parent = *bone_parents.get(index).unwrap_or(&-1);
-        let is_root = parent < 0;
-        if !is_root {
-            let parent = parent as usize;
-            if parent >= bones.len() || !ordered[parent] {
-                return None;
-            }
-            parent_list.push(u8::try_from(parent).unwrap_or(0));
-        }
-        trans.push(bind.trans);
-        ordered[index] = true;
+    let parent_of = |index: usize| -> i32 { *bone_parents.get(index).unwrap_or(&-1) };
+
+    // Roots first, because `DObj` assumes bones 0..num_root_bones are roots and
+    // everything after is a child. A cast skeleton already stores its root at
+    // index 0; this reorders defensively rather than assuming it.
+    let mut order: Vec<usize> = Vec::with_capacity(bones.len());
+    let mut placed = vec![false; bones.len()];
+    let mut roots: Vec<usize> = (0..bones.len()).filter(|i| parent_of(*i) < 0).collect();
+    if roots.is_empty() {
+        return None;
     }
-    let base_mat = bones
+    for root in roots.drain(..) {
+        order.push(root);
+        placed[root] = true;
+    }
+    // Attach each bone once its parent is placed, repeating until nothing is
+    // left; a bone whose parent never arrives leaves the cycle and is refused.
+    let mut progressed = true;
+    while order.len() < bones.len() && progressed {
+        progressed = false;
+        for index in 0..bones.len() {
+            if placed[index] {
+                continue;
+            }
+            let parent = parent_of(index);
+            if parent >= 0 && placed[parent as usize] {
+                order.push(index);
+                placed[index] = true;
+                progressed = true;
+            }
+        }
+    }
+    if order.len() != bones.len() {
+        return None;
+    }
+
+    let num_root_bones = order
         .iter()
-        .map(|bind| {
+        .filter(|index| parent_of(**index) < 0)
+        .count();
+    let mut parent_list = Vec::with_capacity(bones.len() - num_root_bones);
+    let mut quats = Vec::with_capacity(bones.len() - num_root_bones);
+    let mut trans = Vec::with_capacity(bones.len() - num_root_bones);
+    for (position, index) in order.iter().enumerate() {
+        let parent = parent_of(*index);
+        if parent < 0 {
+            continue;
+        }
+        // Map the file's absolute parent onto its new position, then take the
+        // step between them.
+        let parent_position = order
+            .iter()
+            .position(|candidate| *candidate == parent as usize)?;
+        let step = position.checked_sub(parent_position)?;
+        if step == 0 || step > u8::MAX as usize {
+            return None;
+        }
+        parent_list.push(step as u8);
+        quats.push(quantize_quat(bones[*index].quat));
+        trans.push(bones[*index].trans);
+    }
+
+    let base_mat = order
+        .iter()
+        .map(|index| {
+            let bind = &bones[*index];
             (
                 bevy::math::Quat::from_xyzw(bind.quat[0], bind.quat[1], bind.quat[2], bind.quat[3]),
                 bevy::math::Vec3::from_array(bind.trans),
             )
         })
         .collect();
+    let ordered_names: Vec<String> = order.iter().map(|index| bone_names[*index].clone()).collect();
     Some(ModelPoseSrc {
         name: name.to_owned(),
         num_bones: bones.len(),
-        num_root_bones: bones.len().saturating_sub(parent_list.len()),
-        scale: 1.0,
+        num_root_bones,
+        // The pose is what carries the skel's unit scale: bone offsets are left
+        // in the file's own centimetres and scaled here, so skinning reduces to
+        // one multiply rather than rescaling every vertex row and every packed
+        // half-float. `bounds` and `radius` above are pre-multiplied to match.
+        scale: CAST_TO_WORLD,
         no_scale_part_bits: [0; 6],
-        bone_names: bone_names.to_vec(),
+        bone_names: ordered_names,
         parent_list,
-        quats: Vec::new(),
+        quats,
         trans,
         base_mat,
         root_rest: None,
     })
+}
+
+/// One rotation as the packed i16 xyzw `DObj` reads: each component scaled by
+/// 32767 and rounded to nearest, clamped so a component at or past 1.0 does not
+/// wrap into the opposite sign.
+fn quantize_quat(quat: [f32; 4]) -> [i16; 4] {
+    let pack = |value: f32| -> i16 {
+        let scaled = (value * 32767.0).round();
+        scaled.clamp(-32767.0, 32767.0) as i16
+    };
+    [pack(quat[0]), pack(quat[1]), pack(quat[2]), pack(quat[3])]
 }
 
 /// Build one IW4 packed vertex row.
@@ -421,6 +511,13 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
     let mut bone_names: Vec<String> = Vec::new();
     let mut bones: Vec<BoneBind> = Vec::new();
     let mut bone_parents: Vec<i32> = Vec::new();
+    // Tag bones are ordinary bones carrying a reserved name, so the index is
+    // found by name rather than by a node type. Absent stays absent: a gun
+    // viewmodel carries attachment tags (`tag_clip`, `tag_foregrip`) and none of
+    // these two, while a viewhands skeleton carries both. The renderer asks the
+    // hands for them, so requiring them here would reject every gun.
+    let mut tag_view: Option<usize> = None;
+    let mut tag_weapon: Option<usize> = None;
 
     let mut visit = |id: u32, node: &Node<'_>| -> Result<(), String> {
         if id == NODE_BONE {
@@ -434,6 +531,12 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
                 .map(|data| i32::from_le_bytes([data[0], data[1], data[2], data[3]]))
                 .unwrap_or(-1);
             bone_parents.push(parent);
+            let index = bone_names.len() - 1;
+            match bone_names[index].as_str() {
+                "tag_view" if tag_view.is_none() => tag_view = Some(index),
+                "tag_weapon" if tag_weapon.is_none() => tag_weapon = Some(index),
+                _ => {}
+            }
             bones.push(BoneBind {
                 quat: [rotation[0], rotation[1], rotation[2], rotation[3]],
                 trans: [position[0], position[1], position[2]],
@@ -569,14 +672,14 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
         }
     }
     let mid = [
-        (lo[0] + hi[0]) * 0.5,
-        (lo[1] + hi[1]) * 0.5,
-        (lo[2] + hi[2]) * 0.5,
+        (lo[0] + hi[0]) * 0.5 * CAST_TO_WORLD,
+        (lo[1] + hi[1]) * 0.5 * CAST_TO_WORLD,
+        (lo[2] + hi[2]) * 0.5 * CAST_TO_WORLD,
     ];
     let half = [
-        (hi[0] - lo[0]) * 0.5,
-        (hi[1] - lo[1]) * 0.5,
-        (hi[2] - lo[2]) * 0.5,
+        (hi[0] - lo[0]) * 0.5 * CAST_TO_WORLD,
+        (hi[1] - lo[1]) * 0.5 * CAST_TO_WORLD,
+        (hi[2] - lo[2]) * 0.5 * CAST_TO_WORLD,
     ];
     let radius = positions
         .iter()
@@ -594,8 +697,8 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
         name: name.to_owned(),
         bone_collision: vec![None; bones.len()],
         bone_names,
-        tag_view: None,
-        tag_weapon: None,
+        tag_view,
+        tag_weapon,
         bones,
         pose,
         positions,
@@ -628,18 +731,21 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
         rigid_verts,
         blend_verts,
         packed_vertices,
-        radius: Some(radius),
+        radius: Some(radius * CAST_TO_WORLD),
         bounds: Some((mid, half)),
         contents: None,
         coll_lod: -1,
         coll_surfs: Vec::new(),
         movement_brushes: Vec::new(),
         mount_tag: None,
-        lod: Some(ModelLodSelector::Iw4 {
-            lod_start: 0,
-            num_lods: 1,
-            lod_dist: [0.0; 4],
-        }),
+        // No distance selector. A cast file carries one LOD and no lod_dist
+        // thresholds, and writing an Iw4 selector with `lod_dist` all zero makes
+        // `dpvs_iw4::xmodel_get_lod_for_dist` reject every distance: it returns a
+        // LOD only when `dist < lod_dist[i]`, and a threshold of zero is never
+        // greater than a distance. With no selector `smodel_camera_lod` returns
+        // LOD 0 unconditionally, which is the truth for this file. The surface
+        // span below already puts every surface at LOD 0.
+        lod: None,
         lod_smc: None,
         lod_part_bits: None,
         lod_surf_span: [
@@ -650,3 +756,6 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
         ],
     })
 }
+
+
+

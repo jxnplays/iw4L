@@ -468,6 +468,7 @@ fn append_item_draws(
                 scene_entnum: Some(row.entnum),
                 body_client: None,
                 caster_bound,
+                debug_model: "",
             });
         }
         perf::item(entity_iw4::ET_ITEM, None, None, Some("posed"));

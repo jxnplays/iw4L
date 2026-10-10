@@ -529,11 +529,20 @@ impl FpvPreparationJob {
             self.melee.push(registry.melee_weapon_of(id));
             (id, 0)
         };
-        let gun = registry
+        let mut gun = registry
             .gun_xmodel_edge_of(id)
             .and_then(|edge| edge.bound_index())
             .filter(|&order| fpv.get_at(order).is_some())
             .map(FpvMeshIndex::from_order);
+        // The scar2 row's edge can resolve to a catalog entry whose surfaces
+        // are still the donor mesh. The prepared slot must use the parsed cast
+        // (54 bones, 30 surfaces). This does not write the row's gun_xmodel.
+        if registry.name_of(id) == "scar2"
+            && let Some(order) =
+                fpv.parsed_model_order("nx1_viewmodel_scar2", 54, 30)
+        {
+            gun = Some(FpvMeshIndex::from_order(order));
+        }
         if parent == 0 {
             self.guns.push(gun);
         }

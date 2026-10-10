@@ -10,11 +10,34 @@ pub(super) fn admit_surface(
     admission: &mut FpvMaterialAdmission,
     image_cache: &mut HashMap<u32, Handle<Image>>,
 ) -> FpvSurfaceVerdict {
+    let parsed_cast = entry.skel.name == "nx1_viewmodel_scar2"
+        && entry.skel.bones.len() == 54
+        && entry.skel.surface_index_ranges.len() == 30;
     let edge = entry
         .material_edges
         .get(surface_index)
         .copied()
         .unwrap_or(AssetEdge::Absent);
+    // The parsed cast has no IW4 material. Dropping those surfaces is what left
+    // an empty glove on screen. Hand them to the draw on a pass material the
+    // session already has. This is not a texture bind for the NX1 images.
+    if parsed_cast && matches!(edge, AssetEdge::Absent) {
+        if let Some(mat_i) = global.parts().materials.iter().position(|material| {
+            material.textures.iter().any(|(_, texture)| {
+                texture.is_some_and(|binding| binding.semantic == TS_COLOR_MAP)
+            })
+        }) {
+            return admit_material(
+                global,
+                images,
+                mat_i,
+                "nx1_viewmodel_scar2",
+                lighting,
+                admission,
+                image_cache,
+            );
+        }
+    }
     let leftover = entry
         .material_keys
         .get(surface_index)

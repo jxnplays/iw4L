@@ -169,7 +169,17 @@ pub fn sync_fpv_to_held_weapon(
     if owners.bind(table).is_none() {
         return;
     }
-    let state = match table.gun_index(held) {
+    let state = match crate::occupancy::fpv_present::held_view_gun_index(
+        owners
+            .classes
+            .as_ref()
+            .and_then(|c| c.equipped_primary.as_deref()),
+        &owners,
+        table,
+        presented.weapon_epoch(),
+        held,
+        ps.weapon_primary,
+    ) {
         Some(gun_index) => {
             for entity in &existing_fpv {
                 commands.entity(entity).try_despawn();

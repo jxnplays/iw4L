@@ -492,6 +492,7 @@ fn append_missile_draws(
                 scene_entnum: row.entnum,
                 body_client: None,
                 caster_bound,
+                debug_model: "",
             });
         }
     }

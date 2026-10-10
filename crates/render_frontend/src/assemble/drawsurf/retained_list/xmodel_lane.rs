@@ -1,4 +1,5 @@
 use super::common::{retained_draw_order_tie, with_catalog};
+use render_anim::DEBUG_DYENT_KEY;
 use crate::assemble::drawsurf::tess::xmodel::{
     XMODEL_OBJECT_ID_VIEWMODEL, XModelDrawPlan, merge_xmodel_draw_plan,
 };
@@ -32,6 +33,20 @@ pub struct XModelDrawLane {
     pub(crate) skipped_no_baked_key: u32,
     pub(crate) skipped_camera_frustum: u32,
     pub(crate) skipped_no_lighting: u32,
+    /// Which gate dropped the debug dyn-ent's draw, if it was dropped. Debug-only.
+    pub(crate) debug_skip_reason: Option<&'static str>,
+}
+
+impl XModelDrawLane {
+    /// Publish the debug skip reason to the console trace resource. Debug-only.
+    pub(crate) fn publish_debug_skip(
+        &self,
+        out: &mut Option<&'static str>,
+    ) {
+        if let Some(reason) = self.debug_skip_reason {
+            *out = Some(reason);
+        }
+    }
 }
 
 fn xmodel_camera_material(
@@ -171,6 +186,7 @@ pub(crate) fn rebuild_xmodel_draw_lane(
         Option<Res<crate::prepare::scene::gfx_scene::HostGfxScene>>,
     ),
     mut xmodel: ResMut<XModelDrawPlan>,
+    mut debug_lane_reason: Option<ResMut<render_anim::DynEntDebugTrace>>,
     sky: Option<Res<crate::assemble::drawsurf::tess::sky::SkyModelDrawPlan>>,
     prepared: Option<Res<PreparedSceneView>>,
     runtime: Res<crate::assemble::drawsurf::MaterialGeneration>,
@@ -202,6 +218,10 @@ pub(crate) fn rebuild_xmodel_draw_lane(
         sky.as_deref()
             .zip(prepared.as_ref().filter(|v| v.ready).map(|v| v.eye)),
     );
+
+    if let Some(slot) = debug_lane_reason.as_deref_mut() {
+        slot.0 = None;
+    }
 
     let (presented, effects, gaps) = presentation;
     let thermal = crate::assemble::drawsurf::thermal_body::ThermalBodySelection::new(
@@ -250,21 +270,33 @@ pub(crate) fn rebuild_xmodel_draw_lane(
 
     for (source, draw) in xmodel.draws.iter().enumerate() {
         let source = u32::try_from(source).unwrap_or(u32::MAX);
+        // Debug-only: the debug dyn-ent is the one whose model name is this key.
+        let is_debug = draw.debug_model == DEBUG_DYENT_KEY;
         if matches!(
             draw.colour_refusal,
             Some(crate::assemble::drawsurf::tess::xmodel::XModelColourRefusal::CameraFrustum)
         ) {
             lane.skipped_camera_frustum = lane.skipped_camera_frustum.saturating_add(1);
+            if is_debug {
+                lane.debug_skip_reason = Some("lane: colour_refusal CameraFrustum");
+            }
             continue;
         }
         let Some((material_sorted_index, model_lighting_required)) =
             xmodel_camera_material(&xmodel, draw, &runtime.catalog, &thermal)
         else {
             lane.skipped_no_ordinal = lane.skipped_no_ordinal.saturating_add(1);
+            if is_debug {
+                lane.debug_skip_reason = Some("lane: no material ordinal");
+            }
             continue;
         };
         if model_lighting_required && draw.lighting_handle == 0 {
             lane.skipped_no_lighting = lane.skipped_no_lighting.saturating_add(1);
+            if is_debug {
+                lane.debug_skip_reason =
+                    Some("lane: model_lighting_required but lighting_handle is 0");
+            }
             continue;
         }
         let Some(baked) = runtime
@@ -273,6 +305,9 @@ pub(crate) fn rebuild_xmodel_draw_lane(
             .and_then(|material| material.baked_draw_surf)
         else {
             lane.skipped_no_baked_key = lane.skipped_no_baked_key.saturating_add(1);
+            if is_debug {
+                lane.debug_skip_reason = Some("lane: material has no baked_draw_surf");
+            }
             continue;
         };
         let key = with_reflection_probe_index(
@@ -306,6 +341,46 @@ pub(crate) fn rebuild_xmodel_draw_lane(
         );
         lane.distortion.push(item);
         lane.distortion_source.push(source);
+        if is_debug {
+            // World bounds the GPU pass will use, from the same
+            // `world_from_local` the draw carries, and the counts for this draw.
+            let (start, count) = xmodel
+                .surface_ranges
+                .get(draw.surface as usize)
+                .copied()
+                .unwrap_or((0, 0));
+            let p = draw.world_from_local.w_axis.truncate();
+            let x = draw.world_from_local.x_axis.truncate();
+            let y = draw.world_from_local.y_axis.truncate();
+            let z = draw.world_from_local.z_axis.truncate();
+            let span = |v: bevy::math::Vec3, a: bevy::math::Vec3| {
+                (v + a).abs().max_element() - (v - a).abs().min_element()
+            };
+            if let Some(slot) = debug_lane_reason.as_deref_mut() {
+                slot.0 = Some(format!(
+                    "lane: ADMITTED prims={} idx_start={} verts_total={} surface={} \
+                     material={} object_id={} lighting_handle={} packed_rows={} \
+                     origin=[{:.1},{:.1},{:.1}] axes_len=[{:.2},{:.2},{:.2}] surface_len={:?} cast={:?}",
+                    count / 3,
+                    start,
+                    xmodel.decoded_n,
+                    draw.surface,
+                    draw.material,
+                    draw.object_id,
+                    draw.lighting_handle,
+                    lane.merge_packed_n.unwrap_or(u32::MAX),
+                    p.x,
+                    p.y,
+                    p.z,
+                    x.length(),
+                    y.length(),
+                    z.length(),
+                    xmodel.packed_rows().map(|rows| rows.len()),
+                    draw.caster_bound,
+                ));
+            }
+            let _ = (span, y, z);
+        }
         match crate::assemble::drawsurf::frame_product_kind_for_camera_region(item.camera_region) {
             Some(crate::assemble::drawsurf::FrameProductKind::Emissive) => {
                 lane.emissive.push(item);

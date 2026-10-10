@@ -32,7 +32,8 @@ pub use lighting::{
     script_model_lighting_box_half, viewmodel_lighting_origin,
 };
 pub use occupancy::{
-    DynEntCellBits, DynEntPhysClip, DynEntPhysWorld, FpvGeometrySet, FpvPlacementRoot,
+    DEBUG_DYENT_KEY, DynEntCellBits, DynEntDebugTrace, DynEntPhysClip, DynEntPhysWorld,
+    FpvGeometrySet, FpvPlacementRoot,
     FpvPlacementSet, GunOffset, PendingViewHurt, RemoteFxBolts, RemotePlayer, RenderFocus,
     ScriptModelDrawSet, ScriptModelSkinSet, SessionViewmodel, occupy_fpv_scene, spawn_pending_fpv,
     stamp_fpv_placement_matrix, sync_camera_from_presented, tick_fpv_viewmodel,

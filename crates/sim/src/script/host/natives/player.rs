@@ -225,32 +225,80 @@ pub(crate) fn write_class_data(
     if fields.is_empty() {
         return Ok(());
     }
-    let keys = fields
-        .iter()
-        .map(|(keys, _)| data_keys(keys))
-        .collect::<Result<Vec<_>, _>>()?;
+    // Diagnostic: this function has four failure sites and `data_error` maps all
+    // of them to the same `Field(UnknownName)` string, so the fault text alone
+    // does not say which one ran. Each site logs its own name, the key path, and
+    // the underlying error, then returns the identical error unchanged.
+    let render_value = |values: &[Value]| {
+        values
+            .iter()
+            .map(|value| format!("{value:?}"))
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+    let render = |keys: &[structured_data_iw4::Key<'_>]| {
+        keys.iter()
+            .map(|key| format!("{key:?}"))
+            .collect::<Vec<_>>()
+            .join(".")
+    };
+
+    let mut keys = Vec::with_capacity(fields.len());
+    for (path, _) in fields {
+        match data_keys(path) {
+            Ok(resolved) => keys.push(resolved),
+            Err(error) => {
+                diag::error!(
+                    Sim,
+                    "class data write failed at site=data_keys key path [{}]: {error}",
+                    render_value(path)
+                );
+                return Err(error);
+            }
+        }
+    }
+
     let store = world.resource::<crate::PersistentDataStore>();
-    let values = fields
-        .iter()
-        .zip(&keys)
-        .map(|((_, value), keys)| {
-            data_value(
-                store
-                    .field_type(ClientId(client), keys)
-                    .map_err(data_error)?,
-                value,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut values = Vec::with_capacity(fields.len());
+    for ((_, value), path) in fields.iter().zip(&keys) {
+        let ty = match store.field_type(ClientId(client), path) {
+            Ok(ty) => ty,
+            Err(error) => {
+                diag::error!(
+                    Sim,
+                    "class data write failed at site=field_type key path [{}]: {error:?}",
+                    render(path)
+                );
+                return Err(data_error(error));
+            }
+        };
+        match data_value(ty, value) {
+            Ok(converted) => values.push(converted),
+            Err(error) => {
+                diag::error!(
+                    Sim,
+                    "class data write failed at site=data_value key path [{}]: {error}",
+                    render(path)
+                );
+                return Err(error);
+            }
+        }
+    }
+
     let writes = keys
         .iter()
         .zip(values)
-        .map(|(keys, value)| (keys.as_slice(), value))
+        .map(|(path, value)| (path.as_slice(), value))
         .collect::<Vec<_>>();
-    world
-        .resource_mut::<crate::PersistentDataStore>()
-        .write_many(ClientId(client), &writes)
-        .map_err(data_error)?;
+    let mut store = world.resource_mut::<crate::PersistentDataStore>();
+    if let Err(error) = store.write_many(ClientId(client), &writes) {
+        diag::error!(
+            Sim,
+            "class data write failed at site=write_many key path [{} fields]: {error:?}",
+            keys.len()
+        );
+        return Err(data_error(error));
+    }
     Ok(())
 }
 

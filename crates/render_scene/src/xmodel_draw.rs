@@ -26,6 +26,10 @@ pub struct XModelSurfaceDraw {
     pub scene_entnum: Option<u32>,
     pub body_client: Option<u32>,
 
+    /// Model name this draw came from. Debug-only: the draw lane uses it to
+    /// name the gate that drops the debug dyn-ent.
+    pub debug_model: &'static str,
+
     /// World-space bounding sphere of the object this surface belongs to.
     /// `None` is "unbounded": the surface is admitted to every shadow
     /// partition, which is what a producer that cannot state a bound gets.

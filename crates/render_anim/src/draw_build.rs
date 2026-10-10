@@ -1,11 +1,13 @@
 use crate::geometry::{append_mesh, f32x2, f32x3, f32x4, install_retained_packed};
 use bevy::mesh::Indices;
 use bevy::prelude::*;
+use diag::Channel::World;
 use render_frame::SmodelVertex;
 use render_material::{RuntimeMaterialCatalog, SortedMaterialOrdinal};
 use render_scene::{SmodelPassMaterial, WorldModelLightingAtlas};
 
 use crate::anim::fpv_pose::PosedModelSurface;
+use crate::occupancy::dyn_ent::DEBUG_DYENT_KEY;
 use crate::draw::{
     BODY_PACKED_UNAVAILABLE, DynEntAssetDraw, DynEntDrawPlan, FPV_PACKED_EMPTY_PLAN,
     FPV_PACKED_UNAVAILABLE, FpvDrawPlan, ItemDrawPlan, MissileDrawPlan, RemoteBodyDrawPlan,
@@ -639,12 +641,79 @@ pub fn append_dynent_asset(
     materials: &[Option<SmodelPassMaterial>],
 ) -> Vec<(u32, u32)> {
     let asset_surfaces = append_dynent_surfaces(plan, surfaces, materials);
+    if key.0 == DEBUG_DYENT_KEY {
+        let before = plan.vertices.len().saturating_sub(model_vertex_total(surfaces));
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for surface in surfaces {
+            let Some(positions) = surface.mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+                continue;
+            };
+            let Some(values) = f32x3(positions) else { continue };
+            for v in values {
+                for axis in 0..3 {
+                    lo[axis] = lo[axis].min(v[axis]);
+                    hi[axis] = hi[axis].max(v[axis]);
+                }
+            }
+        }
+        let finite = lo[0].is_finite();
+        let span = if finite { hi[0] - lo[0] } else { 0.0 };
+        let material_count = materials.iter().flatten().count();
+        let in_draw_list = !asset_surfaces.is_empty();
+        let packed_ok = matches!(plan.packed_vertices, asset_world::PackedVertexPayload::Iw4(_));
+        let packed_layout = match &plan.packed_vertices {
+            asset_world::PackedVertexPayload::Iw4(rows) => rows.len().to_string(),
+            asset_world::PackedVertexPayload::Unavailable { source_layout } => {
+                format!("unavailable:{source_layout}")
+            }
+        };
+        let prims: u32 = asset_surfaces
+            .iter()
+            .map(|(surface, _)| plan.surface_ranges[*surface as usize].1 / 3)
+            .sum();
+        let new_verts = plan.vertices.len().saturating_sub(before);
+        diag::info!(
+            World,
+            "debug dynent draw: key={} lod={:?} in_draw_list={} surfaces_in={} surfaces_out={} materials={} \
+             packed_ok={} packed_rows={} new_verts={} prims={} scale=1 bounds=[{:.2},{:.2},{:.2}]..[{:.2},{:.2},{:.2}] span_x={:.2} cull=none",
+            key.0,
+            camera_lod,
+            in_draw_list,
+            surfaces.len(),
+            asset_surfaces.len(),
+            material_count,
+            packed_ok,
+            packed_layout,
+            new_verts,
+            prims,
+            lo[0],
+            lo[1],
+            lo[2],
+            hi[0],
+            hi[1],
+            hi[2],
+            span,
+        );
+    }
     plan.assets.push(DynEntAssetDraw {
         key,
         camera_lod,
         surfaces: asset_surfaces.clone(),
     });
     asset_surfaces
+}
+
+fn model_vertex_total(surfaces: &[PosedModelSurface]) -> usize {
+    surfaces
+        .iter()
+        .map(|surface| {
+            surface
+                .mesh
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .and_then(f32x3)
+                .map_or(0, |values| values.len())
+        })
+        .sum()
 }
 
 /// Publish the rows a prepared rig settled: its indices, its surface ranges,

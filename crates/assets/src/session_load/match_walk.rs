@@ -2,6 +2,204 @@ use super::*;
 
 static NEXT_PRODUCTS_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// Internal model names for the NX1 SCAR Mod 2 override.
+///
+/// These are the names the weapon row carries, so they must match the keys
+/// `insert_in` files the cast under. They are not IW4 asset names and exist
+/// nowhere in a zone file; the only producer is this insert.
+pub(crate) const NX1_VIEWMODEL_NAME: &str = "nx1_viewmodel_scar2";
+pub(crate) const NX1_HANDS_NAME: &str = "nx1_viewhands_us_army";
+pub(crate) const NX1_WORLD_NAME: &str = "nx1_weapon_scar2";
+
+const NX1_EXPORT_ROOT: &str =
+    "E:\\Call of Duty Future Warfare\\NX1\\output\\one-gun\\tools\\saluki\\exported_files\\nx1\\models";
+
+/// Insert the three NX1 cast meshes into the live builds, before publish.
+///
+/// `insert_in` is a method on the build, not on the published catalog, and the
+/// build holds its catalog privately with no constructor from an existing one.
+/// So this has to happen while the build is still live here, rather than by
+/// extending an already-published `Arc`. That is the whole reason this sits in
+/// the match walk: one line later `fpv_meshes.publish()` seals the catalog with
+/// these entries in it, and `resolve_fpv_mesh_edges` binds the row's model edges
+/// against them without either side being hand-wired.
+///
+/// Each name is inserted under the map's own namespace, because
+/// `FpvHands::resolve` and `bind_fpv` both look the name up in the map
+/// namespace and would miss an `Iw4`-namespaced entry.
+/// One material from the Cast export. The hash on the `_col` line stays
+/// unresolved. The image goes in the color slot `admit_material` already reads.
+fn register_nx1_scar_body_color(global: &mut asset_material::MaterialDefinitions) {
+    const MATERIAL: &str = "mc\\mtl_nx_weapon_nx_scar_body";
+    const IMAGE: &str = "nx_weapon_scar_body_col";
+    const SPECULAR: &str = "~nx_weapon_scar_body_spc-rgb&~04ee13be";
+    const TECHSET: &str = "mc_l_sm_r0c0d0n0s0p0";
+    let namespace = asset_core::AssetNamespace::Iw4;
+    if global.material_index_by_ns(namespace, MATERIAL).is_some() {
+        return;
+    }
+    let image = global
+        .images
+        .iter()
+        .position(|image| image.namespace == namespace && image.name.as_str() == IMAGE)
+        .unwrap_or_else(|| {
+            global.images.push(asset_material::AuthoredImage {
+                namespace,
+                name: asset_core::AssetRef::decode(IMAGE),
+                map_type: 0,
+                semantic: asset_material::TS_COLOR_MAP,
+                category: 0,
+                use_srgb_reads: true,
+                width: 0,
+                height: 0,
+                depth: 1,
+                level_count: 1,
+                format: 0,
+                payload: std::sync::Arc::new(Vec::new()),
+                decoded: None,
+                common_owned: false,
+                decoded_variant: None,
+                decoded_by: None,
+                pending_decode: None,
+            });
+            global.images.len() - 1
+        });
+    let specular = global
+        .images
+        .iter()
+        .position(|image| image.namespace == namespace && image.name.as_str() == SPECULAR)
+        .unwrap_or_else(|| {
+            global.images.push(asset_material::AuthoredImage {
+                namespace,
+                name: asset_core::AssetRef::decode(SPECULAR),
+                map_type: 0,
+                semantic: asset_material::TS_SPECULAR_MAP,
+                category: 0,
+                use_srgb_reads: false,
+                width: 0,
+                height: 0,
+                depth: 1,
+                level_count: 1,
+                format: 0,
+                payload: std::sync::Arc::new(Vec::new()),
+                decoded: None,
+                common_owned: false,
+                decoded_variant: None,
+                decoded_by: None,
+                pending_decode: None,
+            });
+            global.images.len() - 1
+        });
+    global.materials.push(asset_material::AuthoredMaterial {
+        name: asset_core::AssetRef::decode(MATERIAL),
+        namespace,
+        technique_set: asset_core::AssetRef::decode(TECHSET),
+        technique_set_edge: asset_core::AssetEdge::Absent,
+        draw_surf: 0,
+        sort_key: 0,
+        info_game_flags: 0,
+        texture_atlas: None,
+        surface_type_bits: None,
+        t5_layered_surface_types: None,
+        state_flags: 0,
+        camera_region: 0,
+        state_bits: Vec::new(),
+        state_bits_entry: None,
+        t5_state_bits_entry: None,
+        iw5_state_bits_entry: None,
+        technique_table: None,
+        route: None,
+        textures: vec![
+            asset_material::MaterialTextureBinding {
+                name_hash: 0,
+                name_start: 0,
+                name_end: 0,
+                sampler_state: 0,
+                semantic: asset_material::TS_COLOR_MAP,
+                image: Some(image),
+            },
+            asset_material::MaterialTextureBinding {
+                name_hash: 0,
+                name_start: 0,
+                name_end: 0,
+                sampler_state: 0,
+                semantic: asset_material::TS_SPECULAR_MAP,
+                image: Some(specular),
+            },
+        ],
+        constants: Vec::new(),
+        zone: asset_core::ZoneOwner::default(),
+    });
+}
+
+fn insert_nx1_cast_meshes(
+    fpv: &mut asset_model::FpvMeshBuild,
+    world: &mut asset_model::WorldWeaponBuild,
+    report: &mut Vec<String>,
+) {
+    let Some(ns) = fpv.map_namespace else {
+        report.push("nx1 cast insert: the fpv catalog has no map namespace, nothing inserted".to_owned());
+        return;
+    };
+    report.push(format!("nx1 cast insert: map namespace is {}", ns.as_str()));
+
+    let mut insert = |label: &str, name: &str, path: String, fpv: &mut asset_model::FpvMeshBuild| {
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                report.push(format!("nx1 cast insert: {label} open failed: {path}: {error}"));
+                return false;
+            }
+        };
+        match asset_model::cast_xmodel::read_cast_xmodel(&bytes, name) {
+            Ok(skel) => {
+                report.push(format!(
+                    "nx1 cast insert: {label} ok name={name} bones={} surfaces={}",
+                    skel.bones.len(),
+                    skel.surface_index_ranges.len()
+                ));
+                fpv.insert_in(ns, skel, None);
+                true
+            }
+            Err(error) => {
+                report.push(format!("nx1 cast insert: {label} parse failed: {path}: {error}"));
+                false
+            }
+        }
+    };
+    insert(
+        "viewmodel",
+        NX1_VIEWMODEL_NAME,
+        format!("{NX1_EXPORT_ROOT}\\viewmodel_scar2\\viewmodel_scar2_LOD0.cast"),
+        fpv,
+    );
+    insert(
+        "hands",
+        NX1_HANDS_NAME,
+        format!("{NX1_EXPORT_ROOT}\\viewhands_nx_us_army\\viewhands_nx_us_army_LOD0.cast"),
+        fpv,
+    );
+
+    let world_path = format!("{NX1_EXPORT_ROOT}\\weapon_scar2\\weapon_scar2_LOD0.cast");
+    match std::fs::read(&world_path) {
+        Ok(bytes) => match asset_model::cast_xmodel::read_cast_xmodel(&bytes, NX1_WORLD_NAME) {
+            Ok(skel) => {
+                report.push(format!(
+                    "nx1 cast insert: world ok name={NX1_WORLD_NAME} surfaces={}",
+                    skel.surface_index_ranges.len()
+                ));
+                world.insert_in(ns, skel, None);
+            }
+            Err(error) => {
+                report.push(format!("nx1 cast insert: world parse failed: {world_path}: {error}"));
+            }
+        },
+        Err(error) => {
+            report.push(format!("nx1 cast insert: world open failed: {world_path}: {error}"));
+        }
+    }
+}
+
 pub(super) async fn walk_prepared_match(
     zone_ff: Result<PathBuf, String>,
     common_mp: Result<PathBuf, String>,
@@ -505,6 +703,7 @@ pub(super) async fn walk_prepared_match(
         merge_image_batch(&mut global, label, batch, job, &mut report);
     }
     if zone_ff.is_ok() {
+        register_nx1_scar_body_color(&mut global);
         let stage = progress.begin_scoped(StageId::Images, "merged", None);
         let decoded = asset_material::decode_material_color_maps(
             &image_trees,
@@ -621,7 +820,23 @@ pub(super) async fn walk_prepared_match(
         &mut report,
     );
     // Bind rigs and tracks to the finished mesh publication, after material linking.
+    insert_nx1_cast_meshes(&mut fpv_meshes, &mut world_weapons, &mut report);
     let fpv_meshes = Arc::new(fpv_meshes.publish());
+    // The match-walk registry is separate from the common set the front menu
+    // reads, so `scar2` has to be registered in both. The idempotence guard
+    // makes this one registration per registry, not a duplicate: it returns
+    // early if the row is already present.
+    match weapons.override_nx1_scar2(
+        NX1_VIEWMODEL_NAME,
+        NX1_HANDS_NAME,
+        NX1_WORLD_NAME,
+    ) {
+        Some(index) => report.push(format!("nx1: scar2 row {index} registered in the match registry")),
+        None => report.push(
+            "nx1: scar2 not registered in the match registry (already present, or no iw4 `scar` donor)"
+                .to_owned(),
+        ),
+    }
     weapons.resolve_fpv_mesh_edges(&fpv_meshes);
     let bodies = Arc::new(bodies.publish());
     let xanims = Arc::new(xanims.publish());

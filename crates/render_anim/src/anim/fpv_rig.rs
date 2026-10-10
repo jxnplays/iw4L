@@ -16,7 +16,7 @@ use anim_iw4::PartBits;
 use anim_iw4::surface_hidden;
 use asset_game::{FpvAssembly, FpvClipTracks, FpvPartRole};
 use asset_model::FpvMeshCatalog;
-use xmodel_runtime::AnimInstance;
+use xmodel_runtime::{AnimInstance, DObj};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FpvSurfaceVerdict {
@@ -380,8 +380,112 @@ impl PreparedFpvRig {
         self.generation
     }
 
+    /// Name of the gun mesh `skin_into` reads. This is the catalog entry the
+    /// composition was built from, not the weapon row's `gun_xmodel`.
+    pub fn gun_mesh_name(&self) -> Option<&str> {
+        self.gun_part().and_then(|entry| self.meshes.name_at(entry))
+    }
+
+    /// Bone count of the skel, and the gun surface count written into the plan.
+    ///
+    /// The surface count is `gun_plan_n`, the draws `install_prepared_fpv_plan`
+    /// copies. It is not the catalog entry's stored surface list.
+    pub fn gun_mesh_shape(&self) -> Option<(usize, usize)> {
+        let draws = self.geometry.gun_plan_n as usize;
+        if draws == 0 {
+            return Some((0, 0));
+        }
+        let entry = self.gun_part()?;
+        let skel = &self.meshes.get_at(entry)?.skel;
+        Some((skel.bones.len(), draws))
+    }
+
+    fn gun_part(&self) -> Option<usize> {
+        self.composition.parts.iter().find_map(|part| {
+            (part.owner == FpvSurfOwner::Gun).then_some(part.model.catalog_entry)
+        })
+    }
+
     pub fn is_dual(&self) -> bool {
         self.dual
+    }
+
+    /// Index count and destination vertex count of the hands already in this plan.
+    /// The parsed gun is added after this span. It does not replace it.
+    pub fn hands_span(&self) -> Option<(usize, usize)> {
+        let slot = self.slots.first()?;
+        let part = self.composition.parts.get(slot.part)?;
+        if part.owner != FpvSurfOwner::Hands {
+            return None;
+        }
+        Some((
+            part.model.layout.indices.len(),
+            part.model.layout.dest_vertex_n,
+        ))
+    }
+
+    /// Eye-space `tag_weapon` on the hands already in this view.
+    ///
+    /// The parsed gun attaches here. Placing its origin at the camera puts the
+    /// camera inside the mesh.
+    pub fn gun_view_parent(&self, pose: &FpvHandPose) -> Option<Mat4> {
+        let dobj = self.composition.assembly.dobj();
+        let index = dobj.find("tag_weapon")?;
+        let skin = pose.skin.get(index)?;
+        let bind = dobj.bones.get(index)?.bind_world;
+        let placed = pose.eye_from_world * *skin * bind;
+        if pose.offset != Vec3::ZERO {
+            Some(Mat4::from_translation(pose.offset) * placed)
+        } else {
+            Some(placed)
+        }
+    }
+
+    /// Parsed viewmodel surfaces, skinned once with the scale already on the skel
+    /// and parented to this view's `tag_weapon`. Not the world model, and not a
+    /// second multiply of the cast positions.
+    pub fn parsed_gun_rows(
+        &self,
+        pose: &FpvHandPose,
+        skel: &asset_model::ModelSkel,
+    ) -> Option<(
+        Vec<u32>,
+        Vec<(u32, u32)>,
+        Vec<[u8; asset_iw4::size::GFX_PACKED_VERTEX]>,
+    )> {
+        if skel.name == "nx1_weapon_scar2" || skel.pose.is_none() {
+            return None;
+        }
+        let parent = self.gun_view_parent(pose)?;
+        let pose_src = skel.pose.as_ref()?;
+        let scale = pose_src.scale;
+        if !scale.is_finite() || scale == 0.0 {
+            return None;
+        }
+        let dobj = DObj::build(&[(pose_src, None)]).ok()?;
+        let world = dobj.pose(&[], &PartBits::default(), Mat4::IDENTITY);
+        let skin = dobj.skin_matrices(&world);
+        let layout = build_skin_layout(skel, 0, |_| true)?;
+        let ranges: Vec<(u32, u32)> = layout
+            .surfaces
+            .iter()
+            .filter(|surface| surface.visible && surface.index_count > 0)
+            .map(|surface| (surface.index_start, surface.index_count))
+            .collect();
+        if ranges.len() != skel.surface_index_ranges.len() || layout.dest_vertex_n == 0 {
+            return None;
+        }
+        let mut rows = vec![[0u8; asset_iw4::size::GFX_PACKED_VERTEX]; layout.dest_vertex_n];
+        let scale_m = Mat4::from_scale(Vec3::splat(scale));
+        skin_packed_into(
+            skel,
+            |bone| parent * scale_m * skin.get(bone).copied().unwrap_or(Mat4::IDENTITY),
+            |_| false,
+            0,
+            &layout,
+            &mut rows,
+        );
+        Some((layout.indices, ranges, rows))
     }
 
     pub(super) fn build(

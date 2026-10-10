@@ -12,7 +12,7 @@ pub mod script_model;
 pub mod third_person;
 pub mod view_kick;
 
-pub use dyn_ent::DynEntCellBits;
+pub use dyn_ent::{DynEntCellBits, DynEntDebugTrace, DEBUG_DYENT_KEY};
 pub use dyn_ent_phys::{DynEntPhysClip, DynEntPhysWorld};
 pub use fpv_present::{
     FpvGeometrySet, FpvPlacementRoot, FpvPlacementSet, SessionViewmodel, occupy_fpv_scene,

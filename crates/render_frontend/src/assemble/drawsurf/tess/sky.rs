@@ -92,6 +92,7 @@ pub fn build_sky_model_draw_plan(
             scene_entnum: None,
             body_client: None,
             caster_bound: None,
+            debug_model: "",
         });
     }
     diag::info!(

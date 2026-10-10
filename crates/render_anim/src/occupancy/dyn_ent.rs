@@ -115,6 +115,18 @@ struct DynEntPoseProduct {
     owners: Vec<DynEntPosedOwner>,
 }
 
+/// Why the debug dyn-ent stopped before or during the draw. Debug-only: only the
+/// key in [`DEBUG_DYENT_KEY`] is traced. The console echoes it, so the gate that
+/// drops the model is visible without reading the log file.
+#[derive(Resource, Default, Clone, Debug, PartialEq, Eq)]
+pub struct DynEntDebugTrace(pub Option<String>);
+
+pub const DEBUG_DYENT_KEY: &str = "iw4l_debug_cast";
+
+fn trace(trace: &mut DynEntDebugTrace, reason: String) {
+    trace.0 = Some(reason);
+}
+
 struct DynEntPosedAsset {
     key: asset_world::MapXModelAssetKey,
     camera_lod: Option<u8>,
@@ -148,6 +160,7 @@ pub fn register_dyn_ent_systems(app: &mut App) {
     dyn_ent_phys::register_dyn_ent_phys(app);
     app.init_resource::<DynEntDrawPlan>()
         .init_resource::<DynEntPoseProduct>()
+        .init_resource::<DynEntDebugTrace>()
         .init_resource::<DynEntCellBits>()
         .init_resource::<DynEntPrimaryLightVis>()
         .add_systems(
@@ -483,6 +496,7 @@ fn pose_dyn_ents(
     lod_skinned: Res<render_scene::LodRampSkinnedDvar>,
     prepared: Res<crate::anim::model_materials::PreparedModelMaterials>,
     mut product: ResMut<DynEntPoseProduct>,
+    mut debug_trace: ResMut<DynEntDebugTrace>,
 ) {
     product.owners.clear();
     if catalog.as_ref().is_some_and(|c| c.is_changed()) {
@@ -498,7 +512,11 @@ fn pose_dyn_ents(
         .map(|(xf, _, _)| xf.translation().to_array());
     let skinned_ramp = lod_skinned.args();
     for (entity, inst, transform, visibility) in &instances {
+        let debug = inst.current_model.0 == DEBUG_DYENT_KEY;
         if inst.dead {
+            if debug {
+                trace(&mut debug_trace, "pose_dyn_ents: dropped, marked dead".into());
+            }
             continue;
         }
 
@@ -511,6 +529,9 @@ fn pose_dyn_ents(
                 | asset_world::MapXModelSceneAsset::T5(skel),
             ) => skel.as_ref(),
             Some(asset_world::MapXModelSceneAsset::Unavailable { .. }) | None => {
+                if debug {
+                    trace(&mut debug_trace, "pose_dyn_ents: dropped, no catalog entry".into());
+                }
                 continue;
             }
         };
@@ -523,6 +544,9 @@ fn pose_dyn_ents(
             skinned_ramp,
         );
         if eye.is_some() && camera_lod.is_none() {
+            if debug {
+                trace(&mut debug_trace, "pose_dyn_ents: dropped, camera LOD None".into());
+            }
             continue;
         }
         let asset_index = if let Some(index) = product.asset_index(&inst.current_model, camera_lod)
@@ -530,11 +554,23 @@ fn pose_dyn_ents(
             index
         } else {
             let Some(dobj) = prepared.scene_dobj(&inst.current_model.0) else {
+                if debug {
+                    trace(
+                        &mut debug_trace,
+                        "pose_dyn_ents: dropped, no DObj in scene_dobjs".into(),
+                    );
+                }
                 continue;
             };
             let dobj_state =
                 xmodel_runtime::DObjSemanticState::bind_pose(inst.current_model.0.clone(), 1, 1);
             let Ok(request) = dobj_state.resolve_request(|_| None) else {
+                if debug {
+                    trace(
+                        &mut debug_trace,
+                        "pose_dyn_ents: dropped, resolve_request failed".into(),
+                    );
+                }
                 continue;
             };
             let Some((surfaces, authored)) = pose_script_dobj_with_materials(
@@ -549,8 +585,29 @@ fn pose_dyn_ents(
                 }),
                 &[],
             ) else {
+                if debug {
+                    let gate = crate::occupancy::script_model::skin_model_filtered_reason(
+                        skel,
+                        skel.surface_vertex_ranges.len(),
+                        skel.packed_vertices.len() == skel.positions.len(),
+                    );
+                    trace(
+                        &mut debug_trace,
+                        format!("pose_dyn_ents: dropped, pose_script_dobj None, gate: {gate}"),
+                    );
+                }
                 continue;
             };
+            if debug {
+                trace(
+                    &mut debug_trace,
+                    format!(
+                        "pose_dyn_ents: OK surfaces={} authored={} lod={camera_lod:?} camera_hidden={camera_hidden}",
+                        surfaces.len(),
+                        authored.iter().flatten().count()
+                    ),
+                );
+            }
             let index = product.assets.len();
             product.assets.push(DynEntPosedAsset {
                 key: inst.current_model.clone(),
@@ -572,6 +629,7 @@ fn pose_dyn_ents(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_dynent_draws(
     catalog: Option<Res<asset_world::MapXModelSceneCatalog>>,
     atlas: Option<Res<WorldModelLightingAtlas>>,
@@ -582,12 +640,28 @@ fn append_dynent_draws(
     mut lighting_requests: ResMut<ModelLightingRequests>,
     product: Res<DynEntPoseProduct>,
     model_materials: Res<crate::anim::model_materials::PreparedModelMaterials>,
+    mut debug_trace: ResMut<DynEntDebugTrace>,
     mut last_material_generation: Local<Option<render_material::MaterialGenerationId>>,
     mut draws: Local<Vec<XModelSurfaceDraw>>,
     mut owners: Local<Vec<DynEntOwnerDraw>>,
 ) {
     let atlas_ref = atlas.as_deref();
     if catalog.is_none() || atlas_ref.is_none() || !facts.spawned || tess.is_none() {
+        if product.owners.iter().any(|row| row.model == DEBUG_DYENT_KEY) {
+            let why = if catalog.is_none() {
+                "no scene catalog"
+            } else if atlas_ref.is_none() {
+                "no lighting atlas"
+            } else if !facts.spawned {
+                "world not spawned"
+            } else {
+                "no material set"
+            };
+            trace(
+                &mut debug_trace,
+                format!("append_dynent_draws: returned early, {why}"),
+            );
+        }
         plan.publish_no_rows();
         return;
     }
@@ -595,7 +669,7 @@ fn append_dynent_draws(
     let atlas_changed = atlas.as_ref().is_some_and(|a| a.is_changed());
     let tess_changed = tess.as_ref().is_some_and(|h| h.is_changed());
     let tess = tess.as_deref().expect("checked");
-    let tess_catalog = std::sync::Arc::clone(&tess.catalog());
+    let tess_catalog = tess.catalog();
     let material_generation = tess.catalog().generation_id();
     let catalog_reset = catalog_changed
         || atlas_changed
@@ -626,10 +700,19 @@ fn append_dynent_draws(
                 .iter()
                 .zip(posed.authored.iter().copied())
                 .map(|(_surface, authored)| {
-                    model_materials.authored(&tess_catalog, authored?).cloned()
+                    model_materials.authored(tess_catalog, authored?).cloned()
                 })
                 .collect();
             if materials.iter().all(Option::is_none) {
+                if posed.key.0 == DEBUG_DYENT_KEY {
+                    trace(
+                        &mut debug_trace,
+                        format!(
+                            "append_dynent_draws: dropped, all {} authored materials None",
+                            materials.len()
+                        ),
+                    );
+                }
                 continue;
             }
             let surfaces = append_dynent_asset(
@@ -643,7 +726,26 @@ fn append_dynent_draws(
             surfaces
         };
         if surfaces_idx.is_empty() {
+            if posed.key.0 == DEBUG_DYENT_KEY {
+                trace(
+                    &mut debug_trace,
+                    format!(
+                        "append_dynent_draws: dropped, plan produced 0 surfaces from {} posed",
+                        posed.surfaces.len()
+                    ),
+                );
+            }
             continue;
+        }
+        if posed.key.0 == DEBUG_DYENT_KEY {
+            trace(
+                &mut debug_trace,
+                format!(
+                    "append_dynent_draws: submitted {} surfaces from {} posed",
+                    surfaces_idx.len(),
+                    posed.surfaces.len()
+                ),
+            );
         }
         let box_half = row
             .radius
@@ -684,6 +786,7 @@ fn append_dynent_draws(
                 scene_entnum: None,
                 body_client: None,
                 caster_bound,
+                debug_model: if row.model == DEBUG_DYENT_KEY { DEBUG_DYENT_KEY } else { "" },
             });
         }
     }

@@ -944,6 +944,7 @@ fn commit_script_model_draw_plan(
                 scene_entnum: row.entnum,
                 body_client: None,
                 caster_bound: Some(row.caster_bound),
+                debug_model: "",
             });
         }
     }
@@ -1165,6 +1166,84 @@ fn compose_or_reuse_script_dobj(
         },
     );
     Some(())
+}
+
+/// Which of `pose_script_dobj_with_materials`' three `?` exits fires, without
+/// changing it. Debug-only: the caller uses this to name the gate for a trace.
+/// Returns "ok" when every gate would pass.
+/// Why `skin_model_filtered` returned `None`, without changing it. Debug-only.
+pub fn skin_model_filtered_reason(
+    skel: &asset_model::ModelSkel,
+    surfaces: usize,
+    packed_matches_positions: bool,
+) -> &'static str {
+    if surfaces == 0 {
+        return "ok";
+    }
+    if skel.surface_index_ranges.len() != surfaces {
+        return "meshes_from_blended: surface_index_ranges length != surface count";
+    }
+    if skel.surface_materials.len() != surfaces {
+        return "meshes_from_blended: surface_materials length != surface count";
+    }
+    if !packed_matches_positions {
+        return "meshes_from_blended: packed_vertices length != positions length";
+    }
+    "ok"
+}
+
+pub fn pose_script_dobj_gate(
+    skels: &[&asset_model::ModelSkel],
+    dobj: &xmodel_runtime::DObj,
+    request: &xmodel_runtime::DObjPoseRequest,
+    lod_view: Option<DObjLodView>,
+    skin_entries: &[dpvs_iw4::SceneEntSkinEntry],
+) -> &'static str {
+    if xmodel_runtime::pose_dobj(dobj, request, Mat4::IDENTITY).is_err() {
+        return "pose_dobj returned Err";
+    }
+    for (model, skel) in skels.iter().enumerate() {
+        let Some(lod) = submodel_camera_lod(skel, lod_view) else {
+            continue;
+        };
+        if skel.surfaces_for_lod(lod).is_empty() {
+            continue;
+        }
+        let Some(slot) = dobj.models.get(model) else {
+            return "dobj.models.get returned None";
+        };
+        let base = slot.base;
+        let world = match xmodel_runtime::pose_dobj(dobj, request, Mat4::IDENTITY) {
+            Ok(world) => world,
+            Err(_) => return "pose_dobj returned Err",
+        };
+        let skin = dobj.skin_matrices(&world);
+        if skin_model_filtered(
+            skel,
+            |bone| skin[base + bone],
+            &[],
+            |surface_index| {
+                dobj.surface_visible(
+                    model,
+                    &skel.surface_part_bits[surface_index],
+                    &request.hide_part_bits,
+                ) && dpvs_iw4::SceneEntSkinEntry::stream_draws(
+                    skin_entries,
+                    model as u16,
+                    lod_local_surface(skel, lod, surface_index) as u16,
+                )
+            },
+            |surface_index| {
+                stream_lod_surface_rigid(skel, lod, skin_entries, model as u16, surface_index)
+            },
+            lod,
+        )
+        .is_none()
+        {
+            return "skin_model_filtered returned None";
+        }
+    }
+    "ok"
 }
 
 pub fn pose_script_dobj_with_materials(

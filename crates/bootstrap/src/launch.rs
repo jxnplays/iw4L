@@ -83,8 +83,22 @@ fn install_class_catalog(
     commands.insert_resource(ui::frontend::maps::MapPresentation::from_tables(
         &common.tables,
     ));
+    // Register `scar2` before the class catalog is built from this registry, so
+    // the front-menu Primary list can offer it. This is the common-set registry
+    // built at launch, which is the only one the menu reads; a registration done
+    // in the match walk would come too late, because `weapon_families()` there
+    // has no families yet and the menu never sees that registry's family set.
+    let mut common_weapons = common.weapons;
+    match common_weapons.override_nx1_scar2(
+        "nx1_viewmodel_scar2",
+        "nx1_viewhands_us_army",
+        "nx1_weapon_scar2",
+    ) {
+        Some(index) => diag::info!(Launch, "nx1: scar2 row {index} registered in the menu registry"),
+        None => diag::info!(Launch, "nx1: scar2 not registered (already present, or no iw4 `scar` donor)"),
+    }
     let mut class_catalog =
-        ClassLoadoutCatalog::from_weapon_registry(std::sync::Arc::new(common.weapons))
+        ClassLoadoutCatalog::from_weapon_registry(std::sync::Arc::new(common_weapons))
             .with_weapon_tables(&common.tables);
     if let Some(table) = shell.perk_table.as_ref() {
         class_catalog = class_catalog.with_perk_table(table);

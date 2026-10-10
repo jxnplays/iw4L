@@ -654,6 +654,21 @@ impl WeaponFamilies {
         out
     }
 
+    /// Add one family, keeping `by_key` consistent.
+    ///
+    /// A family that is already present under the same key replaces it, so a
+    /// second registration of the same weapon cannot leave a duplicate offer in
+    /// the class list.
+    pub fn insert(&mut self, family: WeaponFamily) {
+        match self.by_key.get(&family.key) {
+            Some(&index) => self.families[index] = family,
+            None => {
+                self.by_key.insert(family.key.clone(), self.families.len());
+                self.families.push(family);
+            }
+        }
+    }
+
     pub fn offered(&self) -> impl Iterator<Item = &WeaponFamily> {
         self.families.iter().filter(|family| {
             family.slot != FamilySlot::Other

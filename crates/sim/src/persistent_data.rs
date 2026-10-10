@@ -376,10 +376,29 @@ impl PersistentDataStore {
         let mut changed = false;
         for (keys, value) in fields {
             let lookup = updated.definition.lookup(keys)?;
-            changed |=
-                updated
-                    .definition
-                    .write(&mut updated.bytes, &mut updated.dirty, lookup, *value)?;
+            // Diagnostic: `write` validates the *value* against the field's
+            // declared type — an enum member lookup, notably — which neither
+            // `lookup` nor a type check does. A rejected value surfaces here as
+            // `UnknownName` with nothing naming the field or the value, so log
+            // both, then return the identical error.
+            match updated
+                .definition
+                .write(&mut updated.bytes, &mut updated.dirty, lookup, *value)
+            {
+                Ok(written) => changed |= written,
+                Err(error) => {
+                    let rendered = keys
+                        .iter()
+                        .map(|key| format!("{key:?}"))
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    diag::error!(
+                        Sim,
+                        "class data commit failed for key path [{rendered}] value={value:?}: {error:?}"
+                    );
+                    return Err(error.into());
+                }
+            }
         }
         if changed {
             updated.revision = updated

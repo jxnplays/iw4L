@@ -113,6 +113,7 @@ impl Plugin for ConsolePlugin {
             .add_systems(PreUpdate, feed_console_keyboard.before(InputSystems))
             .init_resource::<frame::ActivePad>()
             .init_resource::<frame::InputDevices>()
+        .init_resource::<crate::debug_cast_model::CastModelHolder>()
             .add_systems(
                 PreUpdate,
                 (

@@ -152,6 +152,7 @@ pub fn sync_class_change_allowed(
 
 pub fn resolve_class_equip_transaction(
     mut store: ResMut<SessionClassStore>,
+    mut host: ResMut<frame::HostClassLoadouts>,
     mut phase: ResMut<ClassSelectPhase>,
     mut overlay: ResMut<ClassSelectOverlayOpen>,
     mut status: ResMut<ClassSelectStatus>,
@@ -184,6 +185,14 @@ pub fn resolve_class_equip_transaction(
                 request_id: rid, ..
             } if rid == request_id => {
                 if accept_class_equip(&mut store, &mut phase, &mut overlay, request_id) {
+                    // Publish the equipped primary in this system. The Ui sync
+                    // can run before this accept, and it will not run again
+                    // while the store is unchanged, so the held view never saw
+                    // base `scar2`.
+                    host.equipped_primary = store
+                        .equipped
+                        .and_then(|index| store.slots.get(index))
+                        .map(|slot| slot.primary.clone());
                     diag::info!(
                         Ui,
                         "class select: reliable Accept request_id={request_id} (overlay closed)"

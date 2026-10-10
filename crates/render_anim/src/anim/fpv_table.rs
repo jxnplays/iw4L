@@ -133,6 +133,41 @@ impl FpvWeaponTable {
         self.guns.get(weapon as usize).copied().flatten()
     }
 
+    /// The prepared view for `weapon` whose gun is `gun`, either by name or by
+    /// catalog index. This is the slot the held view's skin reads.
+    /// Prepared view whose gun index is this catalog order.
+    pub fn view_for_order(&self, order: usize) -> Option<Arc<FpvWeaponView>> {
+        self.slots.iter().flatten().find_map(|side| match side {
+            FpvWeaponSlot::Ready(view) if view.gun_index.order() == order => Some(Arc::clone(view)),
+            _ => None,
+        })
+    }
+
+    /// Any prepared view whose gun name is `gun`, whatever row prepared it.
+    pub fn view_named(&self, gun: &str) -> Option<Arc<FpvWeaponView>> {
+        self.slots.iter().flatten().find_map(|side| match side {
+            FpvWeaponSlot::Ready(view) if view.gun_name == gun => Some(Arc::clone(view)),
+            _ => None,
+        })
+    }
+
+    pub fn view_with_gun(
+        &self,
+        weapon: u32,
+        gun: &str,
+        index: Option<FpvMeshIndex>,
+    ) -> Option<Arc<FpvWeaponView>> {
+        let sides = self.slots.get(weapon as usize)?;
+        for side in sides {
+            if let FpvWeaponSlot::Ready(view) = side
+                && (view.gun_name == gun || index.is_some_and(|index| index == view.gun_index))
+            {
+                return Some(Arc::clone(view));
+            }
+        }
+        None
+    }
+
     pub fn motion_tracker(&self, weapon: u32, parent: u32) -> bool {
         self.facts_of(weapon).is_some_and(|facts| {
             facts.motion_tracker
@@ -239,6 +274,7 @@ impl<'a> BoundFpvTable<'a> {
 pub struct FpvOwnerInputs<'w> {
     pub(crate) weapons: Option<Res<'w, assets::PreparedWeapons>>,
     pub(crate) meshes: Option<Res<'w, assets::PreparedFpvMeshes>>,
+    pub(crate) classes: Option<Res<'w, frame::HostClassLoadouts>>,
     pub(crate) clips: Option<Res<'w, assets::PreparedXAnims>>,
     tess: Option<Res<'w, render_scene::TessMaterials>>,
     lighting: Option<Res<'w, render_scene::WorldModelLightingAtlas>>,

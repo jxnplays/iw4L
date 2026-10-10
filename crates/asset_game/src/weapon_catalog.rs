@@ -1597,6 +1597,172 @@ pub struct Iw5PreparationCensus {
     pub refused: Vec<crate::WeaponSelection>,
 }
 
+impl WeaponRegistry {
+    /// Add `scar2`, the NX1 SCAR Mod 2, as an override of the loaded `scar_mp`
+    /// row.
+    ///
+    /// This is one row cloned from a row the capture layer already produced, not
+    /// a second weapon system.
+    ///
+    /// # The combat numbers are IW4 SCAR's, not NX1 SCAR2's
+    ///
+    /// Damage, fire rate, clip size, recoil and the `sz_xanims` clip list are
+    /// inherited verbatim from the IW4 `scar` donor. NX1 ships no weapon stat
+    /// table that this tree can read: `multiplayer_catalog.json` carries a
+    /// `scar2` row, but it holds only `internal_name`, `display_name`, an empty
+    /// `class` and the evidence string `case "scar2"; scar2_reflex_mp`. There is
+    /// no damage, no RPM, no clip size and no attachment list anywhere in the
+    /// dump, and no `weapons.csv` exists in this repo or in the NX1 export.
+    ///
+    /// So the gun is selectable, renders, and fires, but it fires with IW4 SCAR's
+    /// balance. Do not read these numbers as recovered NX1 data.
+    ///
+    /// # What is genuinely NX1
+    ///
+    /// The three model names, the NX1 item group and category, the NX1 sounds,
+    /// and the NX1 animation clips. Those come from the dump.
+    ///
+    /// The model *edges* are deliberately not set here. `resolve_fpv_mesh_edges`
+    /// rebuilds `gun_xmodel_edge`, `hand_xmodel_edge` and the rest from these
+    /// names against the published mesh catalogs, so hand-building an
+    /// `AssetEdge` would be both redundant and a second thing to keep in sync.
+    /// Call this before `resolve_fpv_mesh_edges`.
+    ///
+    /// The three names are internal keys minted by the cast insert in the match
+    /// walk, not IW4 asset names; they appear in no zone file.
+    pub fn override_nx1_scar2(
+        &mut self,
+        viewmodel_name: &str,
+        hands_name: &str,
+        world_name: &str,
+    ) -> Option<u32> {
+        if self.rows.iter().any(|row| row.name == "scar2") {
+            return None;
+        }
+        // Found by `row.name`, not by an assumed key: a scan of the live registry
+        // found `scar_mp` appears nowhere in it. `scar` is the unsuffixed base row
+        // in the Assault Rifles list; its 51 siblings are attachment permutations
+        // of the same row, so a suffixed donor would drag an attachment
+        // configuration along with it.
+        let donor = self
+            .rows
+            .iter()
+            .position(|row| row.name == "scar" && row.namespace == crate::AssetNamespace::Iw4)?;
+        // `item_group` is a registry-level map keyed by namespace and weapon name,
+        // not a row field. NX1 gets its own group so the class picker files this
+        // weapon under the NX1 category rather than inheriting the donor's.
+        const NX1_ITEM_GROUP: &str = "weapon_nx1";
+        let item_group = NX1_ITEM_GROUP.to_owned();
+        self.item_groups
+            .insert((crate::AssetNamespace::Iw4, "scar2".to_owned()), item_group.clone());
+        let mut row = self.rows[donor].clone();
+
+        row.name = "scar2".to_owned();
+        // The class picker labels from this key. A literal rather than a
+        // localized token, because NX1 has no string table in this tree.
+        row.display_name_key = Some("SCAR Mod 2".to_owned());
+
+        row.gun_xmodel = Some(viewmodel_name.to_owned());
+        row.hand_xmodel = Some(hands_name.to_owned());
+        row.world_model = Some(world_name.to_owned());
+
+        // Derived from the donor's own names, so they still describe `scar_mp`.
+        // The preparation recipe is deliberately kept: it is what `bind_fpv`
+        // uses to choose the namespace for each component, and it is rebound by
+        // `resolve_fpv_mesh_edges` against the new names. The side assemblies
+        // are dropped so they are rebuilt against the new gun instead of being
+        // reused from the donor's.
+        row.fpv_assemblies = [None, None];
+        row.appearances = appearance::PreparedWeaponAppearance::prepare(&row);
+
+        let index = u32::try_from(self.rows.len()).ok()?;
+        self.rows.push(row);
+        self.by_name.insert("scar2".to_owned(), index);
+        self.by_namespaced
+            .insert((crate::AssetNamespace::Iw4, "scar2".to_owned()), index);
+
+        // The family is constructed, not copied: `weapon_families()` is empty at
+        // match load, so there is no SCAR-H family to read fields from, and `slot`
+        // is otherwise derived from a per-namespace schema that is not populated
+        // at this point. It is set explicitly for that reason.
+        self.families.insert(crate::weapon_families::WeaponFamily {
+            key: crate::weapon_families::FamilyKey::new(crate::AssetNamespace::Iw4, "scar2"),
+            item_group,
+            category: Some(crate::CacAuthoredCategory::Nx1),
+            slot: crate::FamilySlot::Primary,
+            display_key: "SCAR Mod 2".to_owned(),
+            // No NX1 card image exists. The missing icon is deliberate.
+            image: String::new(),
+            base: Some(index),
+            attachments: Vec::new(),
+        });
+        Some(index)
+    }
+}
+
+impl WeaponBuild {
+    /// Report every registry row and family key mentioning `needle`.
+    ///
+    /// Diagnostic only. The donor is identified by an IW4 match on this rather
+    /// than by an assumed name, because `scar_mp` is not a published row name
+    /// and the correct key is not knowable by inspection.
+    pub fn report_name_matches(&self, needle: &str, report: &mut Vec<String>) {
+        let lower = needle.to_ascii_lowercase();
+        for (index, row) in self.registry.rows.iter().enumerate() {
+            if !row.name.to_ascii_lowercase().contains(&lower) {
+                continue;
+            }
+            report.push(format!(
+                "nx1 donor scan: row[{index}] name={:?} namespace={} world_model={:?} gun_xmodel={:?}",
+                row.name,
+                row.namespace.as_str(),
+                row.world_model,
+                row.gun_xmodel
+            ));
+        }
+        for family in self.registry.weapon_families().families() {
+            let key = &family.key;
+            if !key.base.to_ascii_lowercase().contains(&lower)
+                && !key.asset_key().to_ascii_lowercase().contains(&lower)
+            {
+                continue;
+            }
+            report.push(format!(
+                "nx1 donor scan: family key={} base={:?} namespace={} slot={:?} offered={} name_key={}",
+                key.asset_key(),
+                key.base,
+                key.namespace.as_str(),
+                family.slot,
+                self.registry
+                    .weapon_families()
+                    .offered()
+                    .any(|offered| offered.key.asset_key() == key.asset_key()),
+                family.name_key()
+            ));
+        }
+        report.push(format!(
+            "nx1 donor scan: {} rows, {} families",
+            self.registry.rows.len(),
+            self.registry.weapon_families().families().len()
+        ));
+    }
+
+    /// Entry point for [`WeaponRegistry::override_nx1_scar2`].
+    ///
+    /// The registry lives behind a private field on this type, so the match
+    /// walk cannot reach it directly. `resolve_fpv_mesh_edges` below is reached
+    /// the same way.
+    pub fn override_nx1_scar2(
+        &mut self,
+        viewmodel_name: &str,
+        hands_name: &str,
+        world_name: &str,
+    ) -> Option<u32> {
+        self.registry
+            .override_nx1_scar2(viewmodel_name, hands_name, world_name)
+    }
+}
+
 fn compose_t6_configuration(base: &WeaponRow, kinds: &[u32], name: String) -> Option<WeaponRow> {
     if base.t6_attachments.is_empty() {
         return None;

@@ -1251,6 +1251,7 @@ fn fill_fx_model_plan(
                 is_scope: false,
                 scene_entnum: None,
                 body_client: None,
+                debug_model: "",
                 caster_bound,
             });
         }

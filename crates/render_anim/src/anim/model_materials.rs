@@ -55,8 +55,45 @@ impl PreparedModelMaterials {
         self.by_authored.get(&authored)
     }
 
+    /// Whether `authored` is a key in `by_authored`, and whether this resource is
+    /// settled against the given catalog.
+    ///
+    /// `authored` returns `None` for two unrelated reasons: the index may be
+    /// absent, or the resource may not be settled for the catalog in hand. A
+    /// caller debugging a missing material needs to tell them apart, so this
+    /// reports both. It builds nothing and mutates nothing.
+    pub fn authored_state(
+        &self,
+        catalog: &Arc<RuntimeMaterialCatalog>,
+        authored: assets::MaterialIndex,
+    ) -> (bool, bool) {
+        (self.by_authored.contains_key(&authored), self.settled_for(catalog))
+    }
+
     pub fn scene_dobj(&self, model: &str) -> Option<&Arc<xmodel_runtime::DObj>> {
         self.scene_dobjs.get(model)
+    }
+
+    /// Publish a scene `DObj` for a model added after the prepare pass ran.
+    ///
+    /// `prepare_model_materials` builds this map once per zone from the models
+    /// the catalog held at that moment, so a model inserted into the catalog
+    /// later is absent here and `scene_dobj` misses it. The caller supplies the
+    /// skel whose pose the bones are posed from; the same `DObj::build` call
+    /// the prepare pass makes is made here, so both paths agree.
+    ///
+    /// Returns false when the skel carries no pose, since `DObj::build` needs
+    /// one, and false leaves any existing entry alone rather than replacing it
+    /// with nothing.
+    pub fn publish_scene_dobj(&mut self, model: &str, skel: &asset_model::ModelSkel) -> bool {
+        let Some(pose) = skel.pose.as_ref() else {
+            return false;
+        };
+        let Ok(dobj) = xmodel_runtime::DObj::build(&[(pose, None)]) else {
+            return false;
+        };
+        self.scene_dobjs.insert(model.to_owned(), Arc::new(dobj));
+        true
     }
 
     pub fn projectile_material(
