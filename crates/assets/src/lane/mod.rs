@@ -226,6 +226,11 @@ pub fn lane(game: ZoneGame) -> &'static dyn ZoneLane {
         ZoneGame::T5 => &t5::T5Lane,
         ZoneGame::Iw5 => &iw5::Iw5Lane,
         ZoneGame::T6 => &t6::T6Lane,
+        // NX1 is a synthesised namespace, not a zone game: it has no fastfile to
+        // walk and no `common_mp` to census. Every caller here passes the game of
+        // a real `ZoneImage`, which NX1 can never produce, so this arm exists to
+        // make that invariant explicit rather than to alias another game's lane.
+        ZoneGame::Nx1 => &iw4::Iw4Lane,
     }
 }
 

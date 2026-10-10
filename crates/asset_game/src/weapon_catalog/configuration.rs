@@ -21,6 +21,9 @@ pub(super) fn authored_name(key: &FamilyKey, attachments: &[String]) -> String {
         AssetNamespace::Iw5 => common::joined_name(&key.base, attachments),
         AssetNamespace::T5 => t5::authored_name(&key.base, attachments),
         AssetNamespace::T6 => t6::authored_name(&key.base, attachments),
+        // NX1 has no authored weapon names: nothing in this tree reads a table
+        // that would define them. The base name is the whole name.
+        AssetNamespace::Nx1 => common::joined_name(&key.base, attachments),
     }
 }
 
@@ -47,6 +50,14 @@ impl WeaponConfigurationCompiler for WeaponRegistry {
             AssetNamespace::Iw5 => &iw5::Iw5Configuration(self),
             AssetNamespace::T5 => &t5::T5Configuration(self),
             AssetNamespace::T6 => &t6::T6Configuration(self),
+            // NX1 rows carry no attachment permutations, so there is nothing to
+            // compile. Refusing keeps the donor's configuration row out of reach.
+            AssetNamespace::Nx1 => {
+                return Err(ConfigurationRefusal::Unsupported(format!(
+                    "nx1 weapon `{}` has no authored attachment permutations",
+                    family.key.base
+                )));
+            }
         };
         compiler.compile(family, selection)
     }

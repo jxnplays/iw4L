@@ -74,6 +74,9 @@ impl PreparedWeaponAppearance {
                         }),
                 );
             }
+            // NX1 has no camouflage table in this tree. The base appearance
+            // pushed before this match is the whole list.
+            crate::AssetNamespace::Nx1 => {}
         }
         appearances.into()
     }

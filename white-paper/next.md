@@ -16,3 +16,10 @@ game_main_for_zone derivation check; result: derives main\ correctly.
 16: no public way to insert a synthetic weapon row, so the redirect itself is not unit tested; crates/asset_game/tests/nx1_scar2.rs covers the category mapping and the primary parse it depends on.
 17: NX1 .cast anims are still unbound: read_cast_xmodel yields one rest pose, no animation tracks.
 18: the 9 scar2 WAVs in nx1_scar2_sounds.iwd are still unbound: the .iwd reader indexes images/*.iwi only, and sounds resolve from zone soundbanks.
+19: NX1 was first filed as a CacAuthoredCategory variant, which put it under PRIMARY beside Assault Rifles; CacAuthoredCategory is the within-game class axis, so that could never make NX1 top-level.
+20: NX1 is now AssetNamespace::Nx1 (an alias target of FamilyId, also used as ZoneGame). The class picker builds folders as (namespace, category) and groups by namespace, so the namespace is what makes it top-level.
+21: adding the variant forced 14 exhaustive match arms to be completed across asset_transport, asset_anim, asset_audio, asset_material, asset_model, asset_world, asset_game, assets, audio, and session; NX1 has no fastfile, so most of them decline explicitly rather than aliasing a retail game.
+22: asset_transport::NamespaceTrees::slot_mut became fallible (Option) because an NX1 arm had nowhere to store; its two callers now guard.
+23: NX1_SCAR2_BASE row keeps the donor's preparation recipe, which is what resolves its meshes in the Iw4 catalog where the cast insert placed them, while the row itself sits in the Nx1 namespace.
+24: NX1's item group is weapon_assault, so within the NX1 folder the picker offers an Assault Rifles subcategory; it is not a second top-level axis.
+25: not verified by launch: no client binary is built on this branch and the working tree has no display for a smoke run.

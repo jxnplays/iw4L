@@ -458,6 +458,10 @@ pub fn group_mp_maps(maps: &[String]) -> [Vec<&str>; 4] {
             Some(crate::ZoneGame::Iw5) => 1,
             Some(crate::ZoneGame::T5) => 2,
             Some(crate::ZoneGame::T6) => 3,
+            // NX1 has no fastfile in this tree, so it can never be a map. It is
+            // grouped into the IW4 column rather than dropped, to keep this
+            // function's `[Vec; 4]` shape.
+            Some(crate::ZoneGame::Nx1) => 0,
         };
         cols[col].push(map.as_str());
     }
@@ -479,6 +483,10 @@ pub fn zone_version(game: crate::ZoneGame) -> u32 {
         crate::ZoneGame::T5 => T5_ZONE_VERSION,
         crate::ZoneGame::Iw5 => IW5_ZONE_VERSION,
         crate::ZoneGame::T6 => T6_ZONE_VERSION,
+        // NX1 ships no fastfile, so no version applies. IW4's is a neutral
+        // placeholder: every caller reaches this only via `find_zone_file`,
+        // which cannot resolve an NX1 zone in the first place.
+        crate::ZoneGame::Nx1 => IW4_ZONE_VERSION,
     }
 }
 

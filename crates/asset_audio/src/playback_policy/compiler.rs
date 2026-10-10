@@ -41,11 +41,14 @@ pub(super) fn compile(
         .ent_channel(variant)
         .map(|id| ChannelKey { namespace, id });
     let channel_info = channel.and_then(|key| channels?.get(key.id as usize));
+    // NX1 has no zone mixer, so there is no cue compiler for it. Returning
+    // `None` declines the alias rather than guessing IW4's semantics.
     let compiler: &dyn CueCompiler = match namespace {
         AssetNamespace::Iw4 => &iw4::Iw4CueCompiler,
         AssetNamespace::Iw5 => &iw5::Iw5CueCompiler,
         AssetNamespace::T5 => &t5::T5CueCompiler,
         AssetNamespace::T6 => &t6::T6CueCompiler,
+        AssetNamespace::Nx1 => return None,
     };
     let semantics = compiler.prepare(row, channel_info);
     let group_gain = match semantics.group {

@@ -1655,18 +1655,24 @@ impl WeaponRegistry {
             .rows
             .iter()
             .position(|row| row.name == "scar" && row.namespace == crate::AssetNamespace::Iw4)?;
+        const NX1: crate::AssetNamespace = crate::AssetNamespace::Nx1;
         // `item_group` is a registry-level map keyed by namespace and weapon name,
-        // not a row field. NX1 gets its own group so the class picker files this
-        // weapon under the NX1 category rather than inheriting the donor's.
-        const NX1_ITEM_GROUP: &str = "weapon_nx1";
+        // not a row field. It is what the class picker reads to place the offer,
+        // and it must resolve through `cac_category_from_item_group` or the offer
+        // is dropped from the picker entirely. NX1 is the outer level (its own
+        // game folder), so this is the class *within* NX1: the SCAR Mod 2 is an
+        // assault rifle.
+        const NX1_ITEM_GROUP: &str = "weapon_assault";
         let item_group = NX1_ITEM_GROUP.to_owned();
-        self.item_groups.insert(
-            (crate::AssetNamespace::Iw4, NX1_SCAR2_BASE.to_owned()),
-            item_group.clone(),
-        );
+        self.item_groups
+            .insert((NX1, NX1_SCAR2_BASE.to_owned()), item_group.clone());
         let mut row = self.rows[donor].clone();
 
         row.name = NX1_SCAR2_BASE.to_owned();
+        // The row moves out of Iw4 and into Nx1. This is what makes NX1 a
+        // top-level game folder beside Iw4/Iw5/T5/T6 rather than a class inside
+        // Iw4: `categories_for` keys its folders by namespace first.
+        row.namespace = NX1;
         // The class picker labels from this key. A literal rather than a
         // localized token, because NX1 has no string table in this tree.
         row.display_name_key = Some("SCAR Mod 2".to_owned());
@@ -1678,9 +1684,10 @@ impl WeaponRegistry {
         // Derived from the donor's own names, so they still describe `scar_mp`.
         // The preparation recipe is deliberately kept: it is what `bind_fpv`
         // uses to choose the namespace for each component, and it is rebound by
-        // `resolve_fpv_mesh_edges` against the new names. The side assemblies
-        // are dropped so they are rebuilt against the new gun instead of being
-        // reused from the donor's.
+        // `resolve_fpv_mesh_edges` against the new names. That is also what keeps
+        // the meshes resolving in the Iw4 catalog, where the cast insert put them.
+        // The side assemblies are dropped so they are rebuilt against the new gun
+        // instead of being reused from the donor's.
         row.fpv_assemblies = [None, None];
         row.appearances = appearance::PreparedWeaponAppearance::prepare(&row);
 
@@ -1688,19 +1695,16 @@ impl WeaponRegistry {
         self.rows.push(row);
         self.by_name.insert(NX1_SCAR2_BASE.to_owned(), index);
         self.by_namespaced
-            .insert((crate::AssetNamespace::Iw4, NX1_SCAR2_BASE.to_owned()), index);
+            .insert((NX1, NX1_SCAR2_BASE.to_owned()), index);
 
         // The family is constructed, not copied: `weapon_families()` is empty at
         // match load, so there is no SCAR-H family to read fields from, and `slot`
         // is otherwise derived from a per-namespace schema that is not populated
         // at this point. It is set explicitly for that reason.
         self.families.insert(crate::weapon_families::WeaponFamily {
-            key: crate::weapon_families::FamilyKey::new(
-                crate::AssetNamespace::Iw4,
-                NX1_SCAR2_BASE,
-            ),
+            key: crate::weapon_families::FamilyKey::new(NX1, NX1_SCAR2_BASE),
             item_group,
-            category: Some(crate::CacAuthoredCategory::Nx1),
+            category: Some(crate::CacAuthoredCategory::Assault),
             slot: crate::FamilySlot::Primary,
             display_key: "SCAR Mod 2".to_owned(),
             // No NX1 card image exists. The missing icon is deliberate.

@@ -17,9 +17,6 @@ pub enum CacAuthoredCategory {
     Projectile,
     Cqb,
     Special,
-    /// NX1-only classes. NX1 has no localized string table in this tree, so
-    /// `menu_label` is the only label source and `loc_key` is always `None`.
-    Nx1,
 }
 
 impl CacAuthoredCategory {
@@ -37,7 +34,6 @@ impl CacAuthoredCategory {
             8 => Self::Projectile,
             9 => Self::Cqb,
             10 => Self::Special,
-            11 => Self::Nx1,
             _ => return None,
         })
     }
@@ -56,7 +52,6 @@ impl CacAuthoredCategory {
             Self::Projectile => "ROCKETS",
             Self::Cqb => "CQB",
             Self::Special => "SPECIAL WEAPONS",
-            Self::Nx1 => "NX1",
         }
     }
 
@@ -72,7 +67,7 @@ impl CacAuthoredCategory {
             Self::Shotgun => "@MENU_SHOTGUNS_CAPS",
             Self::Pistol => "@MENU_HANDGUNS_CAPS",
             Self::Projectile => "@MENU_ROCKETS_CAPS",
-            Self::Cqb | Self::Special | Self::Nx1 => return None,
+            Self::Cqb | Self::Special => return None,
         })
     }
 
@@ -95,7 +90,6 @@ impl CacAuthoredCategory {
             Self::Projectile => "projectile",
             Self::Cqb => "cqb",
             Self::Special => "special",
-            Self::Nx1 => "nx1",
         }
     }
 }
@@ -114,7 +108,6 @@ pub fn cac_category_from_item_group(group: &str) -> Option<CacAuthoredCategory> 
         "weapon_projectile" | "weapon_launcher" => Some(CacAuthoredCategory::Projectile),
         "weapon_cqb" => Some(CacAuthoredCategory::Cqb),
         "weapon_special" => Some(CacAuthoredCategory::Special),
-        "weapon_nx1" => Some(CacAuthoredCategory::Nx1),
         _ => None,
     }
 }

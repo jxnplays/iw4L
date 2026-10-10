@@ -40,6 +40,10 @@ impl<G: Family> SoldierHandsConnection<G> {
             FamilyId::T6 => {
                 SoldierFpvConnection::connect(gun, catalog.family_mesh(hands)?).map(Self::T6)
             }
+            // NX1 has no soldier mesh set in this tree, so there is no soldier
+            // hands connection to build. Its viewmodel hands come from the dump's
+            // own cast instead.
+            FamilyId::Nx1 => None,
         }
     }
 
@@ -81,6 +85,8 @@ impl FpvFamilyConnection {
             FamilyId::Iw5 => SoldierHandsConnection::bind(catalog, gun, hands).map(Self::Iw5),
             FamilyId::T5 => SoldierHandsConnection::bind(catalog, gun, hands).map(Self::T5),
             FamilyId::T6 => SoldierHandsConnection::bind(catalog, gun, hands).map(Self::T6),
+            // See `SoldierHandsConnection::bind`: no NX1 soldier meshes exist.
+            FamilyId::Nx1 => None,
         }
     }
 

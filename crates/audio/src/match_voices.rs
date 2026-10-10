@@ -262,6 +262,8 @@ impl AnnouncerRoutes {
             AssetNamespace::T5 => T5_LINES,
             AssetNamespace::T6 => T6_LINES,
             AssetNamespace::Iw5 => &[],
+            // NX1 has no authored map voice lines.
+            AssetNamespace::Nx1 => &[],
         };
         let Some(native) = native else {
             return Self::default();

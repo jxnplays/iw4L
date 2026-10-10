@@ -35,6 +35,8 @@ impl ZoneSoundCapture {
             ZoneGame::Iw5 => Capture::Iw5(Iw5SoundCapture::for_zone(path)),
             ZoneGame::T5 => Capture::T5(T5SoundCapture::for_zone(path)),
             ZoneGame::T6 => Capture::T6(None),
+            // NX1 has no zone to capture from.
+            ZoneGame::Nx1 => Capture::T6(None),
         };
         Self {
             path: path.to_path_buf(),
@@ -177,6 +179,8 @@ fn is_sound_source(path: &Path, game: ZoneGame) -> bool {
         ZoneGame::Iw5 => &["code_post_gfx_mp", "common_mp", "localized_common_mp"],
         ZoneGame::T5 => &["code_post_gfx_mp", "common_mp", "localized_common_mp"],
         ZoneGame::T6 => &["common_mp"],
+        // NX1 has no fastfile, so no path is a sound source for it.
+        ZoneGame::Nx1 => &[],
     };
     names.iter().any(|name| stem.eq_ignore_ascii_case(name))
 }

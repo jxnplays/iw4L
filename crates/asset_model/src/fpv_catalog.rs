@@ -38,6 +38,10 @@ const fn game_default_hands_name(ns: AssetNamespace) -> &'static str {
     match ns {
         AssetNamespace::Iw4 | AssetNamespace::Iw5 | AssetNamespace::T6 => VIEWHANDS_NAME,
         AssetNamespace::T5 => VIEWHANDS_NAME_T5,
+        // NX1 has its own hands mesh in the dump, which the cast insert supplies
+        // explicitly. This is only the game-default fallback and is never reached
+        // for the SCAR2 row.
+        AssetNamespace::Nx1 => VIEWHANDS_NAME,
     }
 }
 
@@ -531,6 +535,7 @@ impl FpvMeshCatalog {
                 AssetNamespace::T5 => 2,
                 AssetNamespace::Iw5 => 4,
                 AssetNamespace::T6 => 8,
+                AssetNamespace::Nx1 => 16,
             };
         }
         seen.values().filter(|bits| bits.count_ones() >= 2).count()

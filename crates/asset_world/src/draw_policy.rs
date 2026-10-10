@@ -14,6 +14,10 @@ impl WorldDrawPolicy {
             asset_core::FamilyId::Iw5 => Self::iw5(),
             asset_core::FamilyId::T5 => Self::t5(),
             asset_core::FamilyId::T6 => Self::t6(),
+            // NX1 has no world of its own. Its weapon mesh is drawn with
+            // IW4-technique materials, so the IW4 draw policy is the consistent
+            // one for it.
+            asset_core::FamilyId::Nx1 => Self::iw4(),
         }
     }
     pub const fn iw4() -> Self {

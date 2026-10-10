@@ -150,6 +150,12 @@ pub(crate) fn walk_zone_sound(path: &Path) -> Result<SoundCatalog, String> {
         ZoneGame::Iw5 => crate::sound_load_iw5::load_sound_catalog_iw5(path),
         ZoneGame::T5 => crate::sound_load_t5::load_sound_catalog_t5(path),
         ZoneGame::T6 => Err(format!("{}: T6 sound banks are not read", path.display())),
+        // NX1 ships no fastfile. Its sounds come from the Saluki dump and, when
+        // reachable at all, from an `.iwd` via `NamespaceSoundIwd`.
+        ZoneGame::Nx1 => Err(format!(
+            "{}: NX1 has no zone sound bank",
+            path.display()
+        )),
     }
 }
 

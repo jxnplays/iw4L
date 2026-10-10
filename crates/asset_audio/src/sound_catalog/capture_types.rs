@@ -328,6 +328,8 @@ impl CapturedSound {
                 .aliases
                 .get(variant)
                 .and_then(|a| a.decoded_flags().map(|f| f.channel())),
+            // No zone capture for NX1, so there is no channel to read.
+            ZoneGame::Nx1 => None,
         }
     }
 }

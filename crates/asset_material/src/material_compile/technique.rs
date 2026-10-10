@@ -184,5 +184,10 @@ pub(super) fn compiler_for(namespace: AssetNamespace) -> &'static dyn MaterialCo
         AssetNamespace::Iw5 => &iw5::Iw5Compiler,
         AssetNamespace::T5 => &t5::T5Compiler,
         AssetNamespace::T6 => &t6::T6Compiler,
+        // NX1 has no technique compiler of its own. Its materials are registered
+        // under Iw4 with an IW4 techset (`mc_l_sm_r0c0d0n0s0p0`), so they are
+        // compiled by the IW4 compiler. This arm exists only so an NX1-namespaced
+        // material does not fall through to a wildcard.
+        AssetNamespace::Nx1 => &iw4::Iw4Compiler,
     }
 }
