@@ -859,6 +859,9 @@ fn class_profile_data(world: &mut World, class: &crate::ClassDef) -> Vec<(Vec<Va
         // so `gun_xmodel_edge_of` still resolves `nx1_viewmodel_scar2` and the
         // rig draws the NX1 viewmodel and hands. Every other weapon sends its
         // own name, untouched.
+        // Literal, not `asset_game::NX1_SCAR2_BASE`: this crate does not depend on
+        // asset_game, and adding that dependency for one string is not worth it.
+        // Keep in sync with the constant.
         let is_nx1 = base == "scar2";
         // Diagnostic: the comparison above has now missed twice, so log what it
         // actually sees rather than infer it. Reports the setup index, the base

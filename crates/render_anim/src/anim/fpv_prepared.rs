@@ -537,7 +537,7 @@ impl FpvPreparationJob {
         // The scar2 row's edge can resolve to a catalog entry whose surfaces
         // are still the donor mesh. The prepared slot must use the parsed cast
         // (54 bones, 30 surfaces). This does not write the row's gun_xmodel.
-        if registry.name_of(id) == "scar2"
+        if registry.name_of(id) == asset_game::NX1_SCAR2_BASE
             && let Some(order) =
                 fpv.parsed_model_order("nx1_viewmodel_scar2", 54, 30)
         {
