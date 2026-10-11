@@ -1,9 +1,56 @@
 //! Real NX1 `.cast` animation reading. Not a dump: these assert the reader
 //! produces a usable clip from the actual dumped files.
 
-use asset_model::cast_xmodel::{read_cast_xanim, read_cast_xmodel};
+use asset_model::cast_xmodel::{read_cast_xanim, read_cast_xmodel, read_cast_xmodel_materials};
 
 const ROOT: &str = r"E:\Call of Duty Future Warfare\NX1\output\one-gun\tools\saluki\exported_files\nx1";
+
+fn scar_h_mesh() -> (asset_model::ModelSkel, Vec<Option<String>>) {
+    let path = format!("{ROOT}\\models\\viewmodel_scar_h\\viewmodel_scar_h_LOD0.cast");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    read_cast_xmodel_materials(&bytes, "viewmodel_scar_h")
+        .unwrap_or_else(|e| panic!("parse scar_h: {e}"))
+}
+
+/// Every surface must name the material it draws with. A surface with no
+/// material is skipped by the renderer, so this is the difference between a
+/// visible gun and no gun at all.
+#[test]
+fn every_scar_h_surface_names_a_material() {
+    let (skel, names) = scar_h_mesh();
+    assert_eq!(names.len(), skel.surface_index_ranges.len());
+    let unmaterialed: Vec<usize> = names
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        unmaterialed.is_empty(),
+        "surfaces with no material: {unmaterialed:?}"
+    );
+}
+
+/// The body material is the one the gun's own geometry uses; the attachment
+/// materials (sights, launcher) share the file. Both must survive, because a
+/// material resolved to the wrong one would texture the wrong surface.
+#[test]
+fn scar_h_materials_are_the_cast_ones() {
+    let (_, names) = scar_h_mesh();
+    let distinct: std::collections::BTreeSet<&str> =
+        names.iter().flatten().map(String::as_str).collect();
+    assert!(
+        distinct.contains("mc\\mtl_weapon_scar_h"),
+        "body material missing from {distinct:?}"
+    );
+    assert!(
+        distinct.len() > 1,
+        "every surface collapsed onto one material: {distinct:?}"
+    );
+    for name in distinct {
+        assert!(name.starts_with("mc\\mtl_"), "unexpected material {name}");
+    }
+}
 
 fn anim(name: &str) -> xmodel_runtime::AnimClip {
     let path = format!("{ROOT}\\animations\\{name}.cast");

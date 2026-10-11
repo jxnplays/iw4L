@@ -16,12 +16,14 @@
 use crate::{
     BoneBind, ModelSkel, VertSkin, pack_tex_coords, pack_unit_vec, unpack_color,
 };
+use std::collections::HashMap;
 use xmodel_runtime::ModelPoseSrc;
 
 const MAGIC: u32 = 0x7473_6163; // "cast"
 
 const NODE_MESH: u32 = 0x6873_656d; // "mesh"
 const NODE_BONE: u32 = 0x656e_6f62; // "bone"
+const NODE_MATL: u32 = 0x6c74_616d; // "matl"
 const NODE_ANIM: u32 = 0x6d69_6e61; // "anim"
 const NODE_CURV: u32 = 0x7672_7563; // "curv"
 
@@ -255,6 +257,19 @@ impl Node<'_> {
             .text
             .as_deref()
             .ok_or_else(|| format!("cast: `{name}` is not a string property"))
+    }
+
+    /// The value of a single 64-bit integer property, if it is one.
+    ///
+    /// The mesh→material link and the material's own texture ids are both
+    /// `l` (int64) scalars, and both are optional: a mesh without a material
+    /// has no `m`, and a material with no textures names none of them.
+    fn int64(&self, name: &str) -> Option<u64> {
+        let prop = self.get(name)?;
+        if prop.width != Some(8) || prop.data.len() < 8 {
+            return None;
+        }
+        Some(u64::from_le_bytes(prop.data[..8].try_into().ok()?))
     }
 }
 
@@ -493,7 +508,17 @@ fn pack_iw4_vertex(
 /// Bones and the per-vertex bind are read, not assumed. NX1 weapon skeletons
 /// are tag trees whose meshes bind rigidly to `tag_weapon`, and this keeps that
 /// a fact of the file rather than a claim about it.
-pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
+/// Read an NX1 `.cast` mesh and the material each surface names.
+///
+/// The second value is one entry per surface, in surface order: the CryEngine
+/// material path the surface draws with (`mc\mtl_weapon_scar_h` and the rest).
+/// These are names, not catalog rows — this reader holds no catalog, so the
+/// caller registers them and writes the resulting indices onto
+/// `skel.surface_materials` itself.
+pub fn read_cast_xmodel_materials(
+    bytes: &[u8],
+    name: &str,
+) -> Result<(ModelSkel, Vec<Option<String>>), String> {
     let mut cursor = Cursor { bytes, at: 0 };
     if cursor.u32()? != MAGIC {
         return Err("cast: magic is not \"cast\"".to_owned());
@@ -501,6 +526,38 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
     let _version = cursor.u32()?;
     let _flag = cursor.u32()?;
     let _reserved = cursor.u32()?;
+
+    // Materials first, in their own pass over the same container.
+    //
+    // A `mesh` node names its material by id (`m`, an int64), and a `matl` node
+    // does not state its own id — the id sits one below the lowest of the
+    // texture ids the material owns (`specular`/`normal`/`albedo`/`extra0`,
+    // each also an int64). Those ids come from one monotonic counter shared by
+    // materials and their textures, so a material's own id is recoverable from
+    // its textures. This is resolved before the geometry pass because a file is
+    // free to place a mesh before the materials it names; resolving lazily at
+    // the end would miss any that do.
+    let mut material_names: HashMap<u64, String> = HashMap::new();
+    let mut material_scan = Cursor { bytes, at: 16 };
+    walk(&mut material_scan, 0, &mut |id, node| {
+        if id != NODE_MATL {
+            return Ok(());
+        }
+        let Some(name) = node.get("n").and_then(|prop| prop.text.clone()) else {
+            return Ok(());
+        };
+        // The material's own id is one below the lowest texture id it owns. A
+        // material that owns no texture names no slots and has no id to derive,
+        // so it is left out; nothing can reference it either.
+        let owned = ["specular", "normal", "albedo", "extra0"]
+            .into_iter()
+            .filter_map(|slot| node.int64(slot))
+            .min();
+        if let Some(base) = owned {
+            material_names.insert(base.wrapping_sub(1), name);
+        }
+        Ok(())
+    })?;
 
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
@@ -510,6 +567,11 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
     let mut vert_skin: Vec<VertSkin> = Vec::new();
     let mut packed_vertices: Vec<[u8; asset_iw4::size::GFX_PACKED_VERTEX]> = Vec::new();
     let mut surfaces: Vec<Surface> = Vec::new();
+    // The material each surface names, in surface order. Names rather than
+    // catalog indices: this reader has no catalog, so it cannot know the row a
+    // material will occupy. `match_walk` registers the names and stamps the
+    // indices onto `surface_materials` once the catalog exists.
+    let mut surface_material_names: Vec<Option<String>> = Vec::new();
     let mut bone_names: Vec<String> = Vec::new();
     let mut bones: Vec<BoneBind> = Vec::new();
     let mut bone_parents: Vec<i32> = Vec::new();
@@ -649,6 +711,13 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
             index_count: mesh_indices.len(),
             rigid,
         });
+        // `m` is the id of the material this surface draws with. An id no
+        // `matl` claims leaves the surface unmaterialed rather than guessing.
+        surface_material_names.push(
+            node.int64("m")
+                .and_then(|id| material_names.get(&id))
+                .cloned(),
+        );
         Ok(())
     };
 
@@ -695,7 +764,7 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
         })
         .fold(0.0f32, f32::max);
 
-    Ok(ModelSkel {
+    let skel = ModelSkel {
         name: name.to_owned(),
         bone_collision: vec![None; bones.len()],
         bone_names,
@@ -708,8 +777,8 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
         colors,
         uvs,
         indices,
-        // NX1 material names are CryEngine paths (`mc\mtl_nx_weapon_...`) with
-        // no counterpart in the IW4 catalog, so no surface binds a material.
+        // The names are carried alongside so the caller can register them; the
+        // indices themselves belong to a catalog this reader does not hold.
         surface_materials: vec![None; surface_count],
         surface_vertex_ranges: surfaces
             .iter()
@@ -756,7 +825,13 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
             (0, 0),
             (0, 0),
         ],
-    })
+    };
+    Ok((skel, surface_material_names))
+}
+
+/// Read an NX1 `.cast` mesh, discarding the per-surface material names.
+pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
+    read_cast_xmodel_materials(bytes, name).map(|(skel, _)| skel)
 }
 
 /// One bone's channel in an NX1 `.cast` animation.

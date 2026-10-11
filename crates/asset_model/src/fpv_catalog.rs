@@ -142,10 +142,10 @@ impl FpvMeshEntry {
     fn from_skel(
         namespace: AssetNamespace,
         skel: std::sync::Arc<FpvSkel>,
-        materials: Option<&MaterialCatalog>,
+        materials: Option<&MaterialDefinitions>,
     ) -> Self {
         let (material_keys, material_edges) =
-            capture_xmodel_material_slots(&skel.surface_materials, materials.map(|c| &**c));
+            capture_xmodel_material_slots(&skel.surface_materials, materials);
         Self {
             namespace,
             skel,
@@ -359,7 +359,25 @@ impl FpvMeshBuild {
         skel: impl Into<std::sync::Arc<FpvSkel>>,
         materials: Option<&MaterialCatalog>,
     ) {
-        let entry = FpvMeshEntry::from_skel(ns, skel.into(), materials);
+        let entry = FpvMeshEntry::from_skel(ns, skel.into(), materials.map(|c| &**c));
+        self.retain(entry.key(), entry);
+    }
+
+    /// Insert against finished definitions rather than a live catalog.
+    ///
+    /// The zone walk holds a [`MaterialCatalog`] while it runs, and hands that
+    /// to every mesh it captures. The NX1 cast meshes are read afterwards, by
+    /// which point the catalog has been published into [`MaterialDefinitions`],
+    /// and publishing drops the link state that the catalog exists to carry. The
+    /// material rows themselves are all that binding needs, so these insert
+    /// against the definitions directly.
+    pub fn insert_in_defs(
+        &mut self,
+        ns: AssetNamespace,
+        skel: impl Into<std::sync::Arc<FpvSkel>>,
+        materials: &MaterialDefinitions,
+    ) {
+        let entry = FpvMeshEntry::from_skel(ns, skel.into(), Some(materials));
         self.retain(entry.key(), entry);
     }
 

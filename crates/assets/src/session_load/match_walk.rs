@@ -92,71 +92,77 @@ fn insert_nx1_xanims(xanims: &mut asset_anim::XAnimBuild, report: &mut Vec<Strin
 /// Each name is inserted under the map's own namespace, because
 /// `FpvHands::resolve` and `bind_fpv` both look the name up in the map
 /// namespace and would miss an `Iw4`-namespaced entry.
-/// One material from the Cast export. The hash on the `_col` line stays
-/// unresolved. The image goes in the color slot `admit_material` already reads.
-fn register_nx1_scar_body_color(global: &mut asset_material::MaterialDefinitions) {
-    const MATERIAL: &str = "mc\\mtl_nx_weapon_nx_scar_body";
-    const IMAGE: &str = "nx_weapon_scar_body_col";
-    const SPECULAR: &str = "~nx_weapon_scar_body_spc-rgb&~04ee13be";
-    const TECHSET: &str = "mc_l_sm_r0c0d0n0s0p0";
-    let namespace = asset_core::AssetNamespace::Iw4;
-    if global.material_index_by_ns(namespace, MATERIAL).is_some() {
-        return;
+///
+/// Register one NX1 cast material and return its row.
+///
+/// A cast names its materials (`mc\mtl_weapon_scar_h` and the rest), but what
+/// the renderer admits is an IW4 catalog row, and a surface's material edge
+/// binds only when the row exists. A mesh read without this had correct
+/// geometry, correct bones and correct animation and still drew nothing,
+/// because every surface's material resolved to nothing and the renderer skips
+/// an unmaterialed surface outright. That is the whole of the invisible gun.
+fn nx1_placeholder_image(
+    global: &mut asset_material::MaterialDefinitions,
+    namespace: asset_core::AssetNamespace,
+    name: &str,
+    semantic: u8,
+    srgb: bool,
+) -> usize {
+    if let Some(at) = global.image_index_by_key(namespace, name) {
+        return at;
     }
-    let image = global
-        .images
-        .iter()
-        .position(|image| image.namespace == namespace && image.name.as_str() == IMAGE)
-        .unwrap_or_else(|| {
-            global.images.push(asset_material::AuthoredImage {
-                namespace,
-                name: asset_core::AssetRef::decode(IMAGE),
-                map_type: 0,
-                semantic: asset_material::TS_COLOR_MAP,
-                category: 0,
-                use_srgb_reads: true,
-                width: 0,
-                height: 0,
-                depth: 1,
-                level_count: 1,
-                format: 0,
-                payload: std::sync::Arc::new(Vec::new()),
-                decoded: None,
-                common_owned: false,
-                decoded_variant: None,
-                decoded_by: None,
-                pending_decode: None,
-            });
-            global.images.len() - 1
-        });
-    let specular = global
-        .images
-        .iter()
-        .position(|image| image.namespace == namespace && image.name.as_str() == SPECULAR)
-        .unwrap_or_else(|| {
-            global.images.push(asset_material::AuthoredImage {
-                namespace,
-                name: asset_core::AssetRef::decode(SPECULAR),
-                map_type: 0,
-                semantic: asset_material::TS_SPECULAR_MAP,
-                category: 0,
-                use_srgb_reads: false,
-                width: 0,
-                height: 0,
-                depth: 1,
-                level_count: 1,
-                format: 0,
-                payload: std::sync::Arc::new(Vec::new()),
-                decoded: None,
-                common_owned: false,
-                decoded_variant: None,
-                decoded_by: None,
-                pending_decode: None,
-            });
-            global.images.len() - 1
-        });
+    global.images.push(asset_material::AuthoredImage {
+        namespace,
+        name: asset_core::AssetRef::decode(name),
+        map_type: 0,
+        semantic,
+        category: 0,
+        use_srgb_reads: srgb,
+        width: 0,
+        height: 0,
+        depth: 1,
+        level_count: 1,
+        format: 0,
+        payload: std::sync::Arc::new(Vec::new()),
+        decoded: None,
+        common_owned: false,
+        decoded_variant: None,
+        decoded_by: None,
+        pending_decode: None,
+    });
+    global.images.len() - 1
+}
+
+fn register_nx1_material(
+    global: &mut asset_material::MaterialDefinitions,
+    namespace: asset_core::AssetNamespace,
+    material: &str,
+) -> usize {
+    const TECHSET: &str = "mc_l_sm_r0c0d0n0s0p0";
+    if let Some(index) = global.material_index_by_ns(namespace, material) {
+        return index.order();
+    }
+    // The colour and specular images are placeholders with empty payloads: the
+    // cast's own textures are PNGs and this catalog admits DXT, so they are
+    // wired in a later pass. Until then a surface draws with its material's
+    // shading and no texture — the line between an untextured gun and no gun.
+    let color = nx1_placeholder_image(
+        global,
+        namespace,
+        &format!("{material}_col"),
+        asset_material::TS_COLOR_MAP,
+        true,
+    );
+    let specular = nx1_placeholder_image(
+        global,
+        namespace,
+        &format!("{material}_spc"),
+        asset_material::TS_SPECULAR_MAP,
+        false,
+    );
+    let index = global.materials.len();
     global.materials.push(asset_material::AuthoredMaterial {
-        name: asset_core::AssetRef::decode(MATERIAL),
+        name: asset_core::AssetRef::decode(material),
         namespace,
         technique_set: asset_core::AssetRef::decode(TECHSET),
         technique_set_edge: asset_core::AssetEdge::Absent,
@@ -181,7 +187,7 @@ fn register_nx1_scar_body_color(global: &mut asset_material::MaterialDefinitions
                 name_end: 0,
                 sampler_state: 0,
                 semantic: asset_material::TS_COLOR_MAP,
-                image: Some(image),
+                image: Some(color),
             },
             asset_material::MaterialTextureBinding {
                 name_hash: 0,
@@ -195,11 +201,13 @@ fn register_nx1_scar_body_color(global: &mut asset_material::MaterialDefinitions
         constants: Vec::new(),
         zone: asset_core::ZoneOwner::default(),
     });
+    index
 }
 
 fn insert_nx1_cast_meshes(
     fpv: &mut asset_model::FpvMeshBuild,
     world: &mut asset_model::WorldWeaponBuild,
+    defs: &mut asset_material::MaterialDefinitions,
     report: &mut Vec<String>,
 ) {
     let Some(ns) = fpv.map_namespace else {
@@ -208,69 +216,75 @@ fn insert_nx1_cast_meshes(
     };
     report.push(format!("nx1 cast insert: map namespace is {}", ns.as_str()));
 
-    let mut insert = |label: &str, name: &str, path: String, fpv: &mut asset_model::FpvMeshBuild| {
+    // Read one cast file, register every material its surfaces name, and stamp
+    // the resulting catalog rows onto the skel so the mesh binds against them.
+    // The reader hands back names, not rows, because it holds no catalog; the
+    // row a material ends up in is only knowable here.
+    let read_and_stamp = |label: &str,
+                       name: &str,
+                       path: String,
+                       defs: &mut asset_material::MaterialDefinitions,
+                       report: &mut Vec<String>| {
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) => {
                 report.push(format!("nx1 cast insert: {label} open failed: {path}: {error}"));
-                return false;
+                return None;
             }
         };
-        match asset_model::cast_xmodel::read_cast_xmodel(&bytes, name) {
-            Ok(skel) => {
-                report.push(format!(
-                    "nx1 cast insert: {label} ok name={name} bones={} surfaces={}",
-                    skel.bones.len(),
-                    skel.surface_index_ranges.len()
-                ));
-                fpv.insert_in(ns, skel, None);
-                true
-            }
-            Err(error) => {
-                report.push(format!("nx1 cast insert: {label} parse failed: {path}: {error}"));
-                false
-            }
-        }
+        let (mut skel, mats) =
+            match asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, name) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    report.push(format!("nx1 cast insert: {label} parse failed: {path}: {error}"));
+                    return None;
+                }
+            };
+        let mut bound = 0usize;
+        skel.surface_materials = mats
+            .iter()
+            .map(|mat| {
+                let index = mat.as_deref().map(|m| register_nx1_material(defs, ns, m))?;
+                bound += 1;
+                Some(asset_core::WalkLocalMaterialIndex::from_walk(index))
+            })
+            .collect();
+        report.push(format!(
+            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} materials={bound}",
+            skel.bones.len(),
+            skel.surface_index_ranges.len()
+        ));
+        Some(skel)
     };
-    insert(
-        "viewmodel",
-        NX1_VIEWMODEL_NAME,
-        format!("{NX1_EXPORT_ROOT}\\viewmodel_scar2\\viewmodel_scar2_LOD0.cast"),
-        fpv,
-    );
-    // The gun mesh the NX1 clips actually drive. `viewmodel_scar2` is kept
-    // inserted because the world model and any future direct reference still
-    // name it, but the row's `gun_xmodel` points here.
-    insert(
-        "viewmodel_scar_h",
-        NX1_VIEWMODEL_GUN_NAME,
-        format!("{NX1_EXPORT_ROOT}\\viewmodel_scar_h\\viewmodel_scar_h_LOD0.cast"),
-        fpv,
-    );
-    insert(
-        "hands",
-        NX1_HANDS_NAME,
-        format!("{NX1_EXPORT_ROOT}\\viewhands_nx_us_army\\viewhands_nx_us_army_LOD0.cast"),
-        fpv,
-    );
+
+    for (label, name, path) in [
+        (
+            "viewmodel",
+            NX1_VIEWMODEL_NAME,
+            format!("{NX1_EXPORT_ROOT}\\viewmodel_scar2\\viewmodel_scar2_LOD0.cast"),
+        ),
+        // The gun mesh the NX1 clips actually drive. `viewmodel_scar2` is kept
+        // inserted because the world model and any future direct reference
+        // still name it, but the row's `gun_xmodel` points here.
+        (
+            "viewmodel_scar_h",
+            NX1_VIEWMODEL_GUN_NAME,
+            format!("{NX1_EXPORT_ROOT}\\viewmodel_scar_h\\viewmodel_scar_h_LOD0.cast"),
+        ),
+        (
+            "hands",
+            NX1_HANDS_NAME,
+            format!("{NX1_EXPORT_ROOT}\\viewhands_nx_us_army\\viewhands_nx_us_army_LOD0.cast"),
+        ),
+    ] {
+        if let Some(skel) = read_and_stamp(label, name, path, defs, report) {
+            fpv.insert_in_defs(ns, skel, defs);
+        }
+    }
 
     let world_path = format!("{NX1_EXPORT_ROOT}\\weapon_scar2\\weapon_scar2_LOD0.cast");
-    match std::fs::read(&world_path) {
-        Ok(bytes) => match asset_model::cast_xmodel::read_cast_xmodel(&bytes, NX1_WORLD_NAME) {
-            Ok(skel) => {
-                report.push(format!(
-                    "nx1 cast insert: world ok name={NX1_WORLD_NAME} surfaces={}",
-                    skel.surface_index_ranges.len()
-                ));
-                world.insert_in(ns, skel, None);
-            }
-            Err(error) => {
-                report.push(format!("nx1 cast insert: world parse failed: {world_path}: {error}"));
-            }
-        },
-        Err(error) => {
-            report.push(format!("nx1 cast insert: world open failed: {world_path}: {error}"));
-        }
+    if let Some(skel) = read_and_stamp("world", NX1_WORLD_NAME, world_path, defs, report) {
+        world.insert_in_defs(ns, skel, defs);
     }
 }
 
@@ -781,7 +795,6 @@ pub(super) async fn walk_prepared_match(
         merge_image_batch(&mut global, label, batch, job, &mut report);
     }
     if zone_ff.is_ok() {
-        register_nx1_scar_body_color(&mut global);
         let stage = progress.begin_scoped(StageId::Images, "merged", None);
         let decoded = asset_material::decode_material_color_maps(
             &image_trees,
@@ -898,7 +911,7 @@ pub(super) async fn walk_prepared_match(
         &mut report,
     );
     // Bind rigs and tracks to the finished mesh publication, after material linking.
-    insert_nx1_cast_meshes(&mut fpv_meshes, &mut world_weapons, &mut report);
+    insert_nx1_cast_meshes(&mut fpv_meshes, &mut world_weapons, &mut global, &mut report);
     let fpv_meshes = Arc::new(fpv_meshes.publish());
     // The match-walk registry is separate from the common set the front menu
     // reads, so `scar2` has to be registered in both. The idempotence guard

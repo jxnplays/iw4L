@@ -42,10 +42,10 @@ impl WorldWeaponEntry {
     fn from_skel(
         namespace: AssetNamespace,
         skel: std::sync::Arc<ModelSkel>,
-        materials: Option<&MaterialCatalog>,
+        materials: Option<&MaterialDefinitions>,
     ) -> Self {
         let (material_keys, material_edges) =
-            capture_xmodel_material_slots(&skel.surface_materials, materials.map(|c| &**c));
+            capture_xmodel_material_slots(&skel.surface_materials, materials);
         Self {
             namespace,
             skel,
@@ -221,7 +221,24 @@ impl WorldWeaponBuild {
         materials: Option<&MaterialCatalog>,
     ) {
         self.catalog.identity = 0;
-        let entry = WorldWeaponEntry::from_skel(ns, skel.into(), materials);
+        let entry = WorldWeaponEntry::from_skel(ns, skel.into(), materials.map(|c| &**c));
+        let key = entry.key();
+        self.retain(key, entry);
+    }
+
+    /// Insert against finished definitions rather than a live catalog.
+    ///
+    /// The NX1 cast world model is read after the walk has published its
+    /// catalog, which drops the link state the catalog exists to carry; the
+    /// material rows are all the binding needs.
+    pub fn insert_in_defs(
+        &mut self,
+        ns: AssetNamespace,
+        skel: impl Into<std::sync::Arc<ModelSkel>>,
+        materials: &MaterialDefinitions,
+    ) {
+        self.catalog.identity = 0;
+        let entry = WorldWeaponEntry::from_skel(ns, skel.into(), Some(materials));
         let key = entry.key();
         self.retain(key, entry);
     }
