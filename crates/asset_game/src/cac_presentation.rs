@@ -114,6 +114,14 @@ fn weapon_image(weapon_name: &str) -> Option<&'static str> {
         "m4" => "weapon_m4carbine",
         "famas" => "weapon_famas",
         "scar" => "weapon_scar_h",
+        // NX1 SCAR Mod 2. No NX1-specific card icon exists in the dump, so this
+        // borrows the retail SCAR-H card. It is the closest available likeness
+        // and it resolves from the IW4 `.iwd`, which is why the stem is bare:
+        // `decode_ui_image` matches a bare stem against the archive image index
+        // without a namespace, so it does not matter that the row is namespaced
+        // Nx1. A namespaced `nx1:material/...` key would resolve against an NX1
+        // tree, which does not exist, and would come back empty.
+        "scar2" => "weapon_scar_h",
         "tar21" => "weapon_tavor",
         "fal" => "weapon_fnfal",
         "m16" => "weapon_m16a4",

@@ -10,7 +10,10 @@
 //! exercised by a real match load.
 
 use asset_core::AssetNamespace;
-use asset_game::{cac_category_from_item_group, CacAuthoredCategory, FamilyKey, NX1_SCAR2_BASE};
+use asset_game::{
+    CacAuthoredCategory, CacItemPresentation, FamilyKey, cac_category_from_item_group,
+    NX1_SCAR2_BASE,
+};
 
 /// NX1 is a namespace, not a `CacAuthoredCategory`. The class picker builds its
 /// folders as (namespace, category) pairs and groups them by namespace first, so
@@ -133,4 +136,63 @@ fn unusable_primaries_do_not_parse() {
             "`{raw}` should not parse as a family key"
         );
     }
+}
+
+/// The class picker renders a weapon's card from `CacItemPresentation::
+/// prepare_weapon(key).archive_image()`. If that is `None` the slot is blank, so
+/// SCAR2 must resolve to a stem or the preview shows nothing.
+///
+/// This is the regression behind the blank preview: SCAR2 had no arm in
+/// `weapon_image`, so it fell through to `None`.
+#[test]
+fn scar2_resolves_a_cac_card_image_stem() {
+    let presentation = CacItemPresentation::prepare_weapon("nx1:weapon/scar2_mp");
+    assert_eq!(
+        presentation.archive_image(),
+        Some("weapon_scar_h"),
+        "SCAR2 must resolve a card image stem or its preview slot is blank"
+    );
+}
+
+/// The card image the row publishes must name the *Iw4* namespace explicitly.
+///
+/// `prepare_cac_preview` only prefixes a namespace when the value does not parse
+/// as an asset key, and it would prefix this row's own namespace (Nx1), which
+/// has no image tree. Stating Iw4 is what makes the stem resolve against the
+/// archive that actually holds `weapon_scar_h.iwi`.
+#[test]
+fn the_card_image_key_names_the_iw4_namespace() {
+    let key = "iw4:material/weapon_scar_h";
+    let parsed = asset_core::AssetKey::parse(key).expect("card image key should parse");
+    assert_eq!(parsed.namespace, AssetNamespace::Iw4);
+    assert_eq!(parsed.name, "weapon_scar_h");
+    // And it must survive `prepare_cac_preview` unpadded, or the dvar the GSC
+    // reads would not be an asset key at all.
+    let preview = asset_game::prepare_cac_preview(
+        AssetNamespace::Nx1,
+        asset_game::CacWeaponPreview {
+            reference: NX1_SCAR2_BASE.to_owned(),
+            name_key: String::new(),
+            image: key.to_owned(),
+            desc_key: String::new(),
+            bars: Vec::new(),
+        },
+    );
+    assert_eq!(preview.image, key, "card image must not be re-prefixed");
+}
+
+/// The icon worker only decodes stems that some roster entry maps to. SCAR2
+/// borrows the retail SCAR-H stem, which the IW4 `scar_mp` entry already warms,
+/// so no roster change is needed. This test records that, so a future rename of
+/// the borrowed stem cannot silently leave the card undecoded.
+#[test]
+fn the_borrowed_card_stem_is_already_warmed_by_the_donor() {
+    let presentation = CacItemPresentation::prepare_weapon("nx1:weapon/scar2_mp");
+    let stem = presentation.archive_image().expect("stem");
+    let donor = CacItemPresentation::prepare_weapon("iw4:weapon/scar_mp");
+    assert_eq!(
+        donor.archive_image(),
+        Some(stem),
+        "SCAR2 borrows the donor's card stem, so it is already in the warm list"
+    );
 }

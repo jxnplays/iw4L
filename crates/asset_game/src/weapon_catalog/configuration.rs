@@ -50,14 +50,12 @@ impl WeaponConfigurationCompiler for WeaponRegistry {
             AssetNamespace::Iw5 => &iw5::Iw5Configuration(self),
             AssetNamespace::T5 => &t5::T5Configuration(self),
             AssetNamespace::T6 => &t6::T6Configuration(self),
-            // NX1 rows carry no attachment permutations, so there is nothing to
-            // compile. Refusing keeps the donor's configuration row out of reach.
-            AssetNamespace::Nx1 => {
-                return Err(ConfigurationRefusal::Unsupported(format!(
-                    "nx1 weapon `{}` has no authored attachment permutations",
-                    family.key.base
-                )));
-            }
+            // NX1 has no per-game compiler, but it does not need one: with no
+            // attachments the authored name is just the base, and the base is
+            // registered under (Nx1, base). `Iw4Configuration` is the generic
+            // `compile_authored` lookup under a different name, so this resolves
+            // the NX1 row and cannot reach the donor's.
+            AssetNamespace::Nx1 => &iw4::Iw4Configuration(self),
         };
         compiler.compile(family, selection)
     }

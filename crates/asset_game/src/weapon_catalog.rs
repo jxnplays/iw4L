@@ -1707,8 +1707,21 @@ impl WeaponRegistry {
             category: Some(crate::CacAuthoredCategory::Assault),
             slot: crate::FamilySlot::Primary,
             display_key: "SCAR Mod 2".to_owned(),
-            // No NX1 card image exists. The missing icon is deliberate.
-            image: String::new(),
+            // Card image, in the same `<ns>:material/<stem>` form the retail stats
+            // table produces and that `launch.rs` writes for other weapons. The
+            // picker feeds this to the `ui_class_image_N` dvars, so a bare stem
+            // would not work: `prepare_cac_preview` only prefixes a namespace when
+            // the value does not already parse as an asset key, and it would then
+            // choose *this row's* namespace (Nx1), which has no image tree.
+            //
+            // So the namespace is stated explicitly as Iw4, which is where
+            // `images/weapon_scar_h.iwi` actually lives (iw_03.iwd).
+            //
+            // NX1's own dump has no SCAR2 card icon: it carries weapon *textures*
+            // and the `cardicon_expert_scar` / `cardicon_marksman_scar` badges, but
+            // no weapon card. This borrows the retail SCAR-H card, the closest
+            // available likeness. It is the same stem the IW4 `scar` row uses.
+            image: "iw4:material/weapon_scar_h".to_owned(),
             base: Some(index),
             attachments: Vec::new(),
         });
