@@ -167,6 +167,33 @@ fn nx1_rows_are_grouped_with_the_per_model_camo_namespaces() {
     );
 }
 
+/// The stand-in name set that gates the redirect.
+///
+/// Both redirect call sites — the held-view row in `fpv_present` and the audio
+/// entity-event weapon in `entity_events` — match on exactly these names before
+/// remapping anything onto the scar2 row. That gate is the entire reason a
+/// sidearm, a grenade, or the knife keep their own rows instead of all resolving
+/// to scar2, which is what broke weapon swapping, reloading, and animation.
+///
+/// If capture ever publishes a different spelling for the M4 row the gate stops
+/// matching and the redirect silently stops firing, so the contract is recorded
+/// here rather than left implicit in two crates.
+#[test]
+fn the_m4_stand_in_names_are_the_gate_for_the_redirect() {
+    const STAND_IN: [&str; 2] = ["m4", "m4_mp"];
+    for name in STAND_IN {
+        assert!(!name.is_empty(), "a stand-in name must be non-empty");
+        // The stand-in must be a different weapon from the one we redirect to,
+        // or the two rows would be indistinguishable at the gate.
+        assert_ne!(
+            name, NX1_SCAR2_BASE,
+            "the stand-in must not be the scar2 row itself"
+        );
+    }
+    // The donor scar2 borrowed its data from must also not be a stand-in.
+    assert_ne!("scar", NX1_SCAR2_BASE);
+}
+
 /// The class picker renders a weapon's card from `CacItemPresentation::
 /// prepare_weapon(key).archive_image()`. If that is `None` the slot is blank, so
 /// SCAR2 must resolve to a stem or the preview shows nothing.

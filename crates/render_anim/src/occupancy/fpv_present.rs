@@ -227,20 +227,35 @@ fn class_payload_base_is_scar2(primary: Option<&str>) -> bool {
 /// The weapon row the local held view should read, given what the map reported.
 ///
 /// The map is told `m4` for this class because its GSC faults on unknown weapon
-/// names, so it reports weapon 591 back. The clips, sounds, and gun mesh have to
-/// come from the `scar2` row instead. See [`WeaponRegistry::nx1_scar2_row_of`].
+/// names, so it reports weapon 591 (`m4`) back for the primary. The clips,
+/// sounds, and gun mesh have to come from the `scar2` row instead, but *only* for
+/// that stand-in.
+///
+/// The redirect must be gated on the reported weapon actually being the M4
+/// stand-in. Applying it whenever the equipped primary is scar2 pinned the
+/// session to the scar2 row for every weapon: switching to the pistol, a
+/// grenade, or the knife all resolved to scar2, so `session.weapon_id` never
+/// changed and no swap, reload, or animation could be observed. The gate is the
+/// difference between "the map cannot name scar2" and "every weapon is scar2".
+///
+/// Returns `reported` unchanged for every other weapon, which is the whole point:
+/// sidearms, equipment, and melee must keep their own rows.
 fn held_weapon_row(reported: u32, owners: &FpvOwnerInputs) -> u32 {
+    let Some(weapons) = owners.weapons.as_ref() else {
+        return reported;
+    };
+    let registry = weapons.registry();
+    // The stand-in the map is told for this row. Narrow on purpose: this is the
+    // only weapon whose reported id needs remapping.
+    let is_stand_in = matches!(registry.name_of(reported), "m4" | "m4_mp");
+    if !is_stand_in {
+        return reported;
+    }
     owners
-        .weapons
+        .classes
         .as_ref()
-        .and_then(|weapons| {
-            weapons.registry().nx1_scar2_row_of(
-                owners
-                    .classes
-                    .as_ref()
-                    .and_then(|c| c.equipped_primary.as_deref()),
-            )
-        })
+        .and_then(|c| c.equipped_primary.as_deref())
+        .and_then(|primary| registry.nx1_scar2_row_of(Some(primary)))
         .unwrap_or(reported)
 }
 
@@ -1139,13 +1154,20 @@ fn skin_fpv_geometry(
                     .and_then(|c| c.equipped_primary.as_deref()),
             );
             let equipped = session.map(|session| session.weapon_id).unwrap_or(0);
-            // The held view draws the NX1 cast whenever the equipped class names
-            // `scar2`. This used to also require the equipped weapon to be named
-            // `m4`, which held only because the map reports the stand-in weapon
-            // for this class. Now that the session's weapon id is redirected onto
-            // the `scar2` row, the row's own NX1 meshes are what the rig holds
-            // and no name test is needed: this is the fallback's last gate.
-            let submit_nx1 = scar2;
+            // The held view draws the NX1 cast only while the session is actually
+            // holding the `scar2` row.
+            //
+            // Testing the equipped primary alone is not enough. That is true for
+            // the whole class, including while a sidearm or the knife is out, so
+            // it would force the NX1 gun mesh onto every weapon the player picks
+            // up. Keying on the redirected session id means the cast is submitted
+            // for SCAR2 and nothing else, and every other weapon falls through to
+            // its own rig.
+            let holds_scar2 = equipped != 0
+                && owners.weapons.as_ref().is_some_and(|weapons| {
+                    weapons.registry().name_of(equipped) == asset_game::NX1_SCAR2_BASE
+                });
+            let submit_nx1 = scar2 && holds_scar2;
             if equipped != 0 {
                 static SEEN: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
                 let mut seen = SEEN.lock().unwrap_or_else(|poison| poison.into_inner());

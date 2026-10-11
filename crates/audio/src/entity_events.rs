@@ -12,6 +12,17 @@ use crate::{
     footstep_aliases, gear_alias, gear_rattle_alias, land_aliases,
 };
 
+/// Whether `weapon` is the M4 stand-in the class payload sends for the NX1 SCAR
+/// Mod 2 row.
+///
+/// The map's class-selection GSC faults on unknown weapon names, so the payload
+/// declares `m4` for the scar2 row and the map reports weapon 591 back. Only that
+/// id is remapped onto scar2; every other weapon keeps its own row, which is what
+/// lets a sidearm or the knife still sound and animate as themselves.
+fn is_nx1_stand_in(registry: &asset_game::WeaponRegistry, weapon: u32) -> bool {
+    matches!(registry.name_of(weapon), "m4" | "m4_mp")
+}
+
 fn selected_alias<'a>(
     weapons: &asset_game::WeaponRegistry,
     bank: &'a asset_audio::SoundCatalog,
@@ -174,11 +185,17 @@ fn entity_event_sound(
         );
         return;
     };
-    // The map is told `m4` for the NX1 SCAR Mod 2 class, so the reported weapon
-    // is the stand-in row. Read the row the equipped class names so the aliases
-    // come from SCAR2. See `WeaponRegistry::nx1_scar2_row_of`.
+    // The map is told `m4` for the NX1 SCAR Mod 2 class, so the primary comes back
+    // as the stand-in row. Remap *that* weapon onto the scar2 row so its aliases
+    // resolve to SCAR2's.
+    //
+    // The gate on the reported weapon is essential and not an optimisation. An
+    // earlier revision redirected whenever the equipped primary was scar2, which
+    // remapped every weapon event — pistol, grenade, knife — onto the scar2 row,
+    // so those weapons played SCAR2's sounds and could not be told apart. Only
+    // the M4 stand-in needs remapping; everything else keeps its own row.
     let reported = sound.event.payload.weapon;
-    let weapon = if player_view {
+    let weapon = if player_view && is_nx1_stand_in(&weapons.registry(), reported) {
         classes
             .as_deref()
             .and_then(|classes| {
