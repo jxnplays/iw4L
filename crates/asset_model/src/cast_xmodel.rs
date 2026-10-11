@@ -1,4 +1,4 @@
-﻿//! NX1 `.cast` meshes into one `ModelSkel`.
+//! NX1 `.cast` meshes into one `ModelSkel`.
 //!
 //! A `.cast` file is the CryEngine chunked container, not a fastfile: magic
 //! `cast`, then a `root` node holding `meta` and `modl` children. A node is a
@@ -22,6 +22,8 @@ const MAGIC: u32 = 0x7473_6163; // "cast"
 
 const NODE_MESH: u32 = 0x6873_656d; // "mesh"
 const NODE_BONE: u32 = 0x656e_6f62; // "bone"
+const NODE_ANIM: u32 = 0x6d69_6e61; // "anim"
+const NODE_CURV: u32 = 0x7672_7563; // "curv"
 
 /// Cast units are centimetres; IW4 world units are inches.
 ///
@@ -334,8 +336,8 @@ struct Surface {
 /// A cast bone carries its local transform, so the pose is the file's own
 /// hierarchy rather than a reconstruction.
 ///
-/// `DObj` reads three of these arrays by *child* index â€” `bone - num_root_bones`
-/// â€” and `base_mat` by bone index. Bones are therefore emitted roots first, and
+/// `DObj` reads three of these arrays by *child* index — `bone - num_root_bones`
+/// — and `base_mat` by bone index. Bones are therefore emitted roots first, and
 /// `parent_list`, `quats` and `trans` carry one entry per non-root bone.
 ///
 /// `parent_list` is a step, not an absolute index: `DObj` recovers the parent as
@@ -755,6 +757,198 @@ pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
             (0, 0),
         ],
     })
+}
+
+/// One bone's channel in an NX1 `.cast` animation.
+///
+/// Read from a `curv` node. `nn` names the bone, `kp` names the channel, `kb`
+/// holds one frame index per key, and `kv` holds the matching values: four
+/// floats for `rq`, one for each of `tx`/`ty`/`tz`.
+#[derive(Debug, Clone)]
+struct CastCurve {
+    bone: String,
+    /// `rq` (quaternion xyzw), `tx`, `ty`, or `tz`.
+    channel: String,
+    /// One entry per key. Quaternion channels hold 4 floats, translation 1.
+    values: Vec<f32>,
+    /// Frame index per key, as the file states them.
+    frames: Vec<u16>,
+}
+
+/// Read an NX1 `.cast` animation into an [`AnimClip`].
+///
+/// The container is the same one `read_cast_xmodel` walks; this reads the
+/// `anim` node's `curv` children instead of its `mesh` nodes. An `anim` node
+/// carries `fr` (frames per second, 30 in every file checked) and `lo` (loop
+/// flag), and each `curv` child is one bone channel. There is no mesh node, which
+/// is why `read_cast_xmodel` rejects these files outright.
+///
+/// Bones are matched to tracks by name, exactly as the XAnim path does, so a
+/// bone the mesh does not have simply has no track and holds its bind pose.
+/// Tracks are emitted only for bones the file animates; bones absent from the
+/// file are not invented, so the rig keeps their bind transform.
+pub fn read_cast_xanim(bytes: &[u8], name: &str) -> Result<xmodel_runtime::AnimClip, String> {
+    let mut cursor = Cursor { bytes, at: 0 };
+    if cursor.u32()? != MAGIC {
+        return Err("cast: magic is not \"cast\"".to_owned());
+    }
+    let _version = cursor.u32()?;
+    let _flag = cursor.u32()?;
+    let _reserved = cursor.u32()?;
+
+    let mut framerate = 30.0f32;
+    let mut looping = false;
+    let mut curves: Vec<CastCurve> = Vec::new();
+
+    walk(&mut cursor, 0, &mut |id, node| {
+        if id == NODE_ANIM {
+            if node.get("fr").is_some() {
+                framerate = node
+                    .floats("fr", PROP_FLOAT, 1)
+                    .map(|v| v[0])
+                    .unwrap_or(framerate);
+            }
+            if node.get("lo").is_some() {
+                looping = node
+                    .all_floats("lo", PROP_BYTE)
+                    .is_ok_and(|v| v.first().copied().unwrap_or(0.0) != 0.0);
+            }
+            return Ok(());
+        }
+        if id != NODE_CURV {
+            return Ok(());
+        }
+        let bone = node.text("nn")?.to_owned();
+        let channel = node.text("kp")?.to_owned();
+        // `kb` is one byte per key when the frame count fits, else two. Read the
+        // declared width rather than assuming, so a long clip is not misread.
+        let kb = node.required("kb")?;
+        let key_width = match kb.width {
+            Some(w) if w == 1 || w == 2 => w,
+            _ => return Err("cast: `kb` is neither a byte nor a short array".to_owned()),
+        };
+        let key_count = kb.count;
+        let frames: Vec<u16> = kb
+            .data
+            .chunks_exact(key_width)
+            .map(|c| {
+                if key_width == 1 {
+                    u16::from(c[0])
+                } else {
+                    u16::from_le_bytes([c[0], c[1]])
+                }
+            })
+            .collect();
+        let floats_per_key = if channel == "rq" { 4 } else { 1 };
+        let expect = key_count.saturating_mul(floats_per_key);
+        // `kv` holds floats. A quaternion key is xyzw and a translation key is
+        // one float, but the file declares the payload either as a scalar-float
+        // array or as a 4-wide vector array depending on the channel, so accept
+        // whichever width the container states and read every float present.
+        let values = node
+            .all_floats("kv", PROP_FLOAT)
+            .or_else(|_| node.all_floats("kv", PROP_VECTOR4))?;
+        if values.len() < expect {
+            return Err(format!(
+                "cast: bone `{bone}` channel `{channel}` states {key_count} keys but holds {} values",
+                values.len()
+            ));
+        }
+        curves.push(CastCurve {
+            bone,
+            channel,
+            values: values[..expect].to_vec(),
+            frames,
+        });
+        Ok(())
+    })?;
+
+    if curves.is_empty() {
+        return Err("cast: no curv node carried a bone channel".to_owned());
+    }
+
+    // Group channels by bone. A bone's rotation and its three translation axes
+    // are separate `curv` nodes and must be joined, not emitted separately.
+    let mut order: Vec<String> = Vec::new();
+    for curve in &curves {
+        if !order.contains(&curve.bone) {
+            order.push(curve.bone.clone());
+        }
+    }
+
+    let mut tracks = Vec::with_capacity(order.len());
+    let mut max_frame = 0u32;
+    for bone in &order {
+        let own = |channel: &str| curves.iter().find(|c| &c.bone == bone && c.channel == channel);
+        let rotation_curve = own("rq");
+        let tx = own("tx");
+        let ty = own("ty");
+        let tz = own("tz");
+
+        let rotation = match rotation_curve {
+            Some(curve) => {
+                let quats: Vec<[f32; 4]> = curve
+                    .values
+                    .chunks_exact(4)
+                    .map(|c| [c[0], c[1], c[2], c[3]])
+                    .collect();
+                xmodel_runtime::Rotation::FullKeyed(xmodel_runtime::Keyed {
+                    values: quats,
+                    frames: frame_indices(&curve.frames),
+                })
+            }
+            None => xmodel_runtime::Rotation::Default,
+        };
+
+        let translation = match (tx, ty, tz) {
+            (Some(tx), Some(ty), Some(tz)) => {
+                let frames = frame_indices(&tx.frames);
+                let values: Vec<[f32; 3]> = (0..tx.values.len())
+                    .map(|i| {
+                        [
+                            *ty.values.get(i).unwrap_or(&0.0),
+                            *tz.values.get(i).unwrap_or(&0.0),
+                            tx.values[i],
+                        ]
+                    })
+                    .collect();
+                xmodel_runtime::Translation::FullKeyed(xmodel_runtime::Keyed { values, frames })
+            }
+            _ => xmodel_runtime::Translation::Default,
+        };
+
+        for curve in [&rotation_curve, &tx, &ty, &tz].into_iter().flatten() {
+            if let Some(&last) = curve.frames.last() {
+                max_frame = max_frame.max(u32::from(last));
+            }
+        }
+        tracks.push(xmodel_runtime::Track {
+            name: bone.clone(),
+            rotation,
+            translation,
+        });
+    }
+
+    let numframes = u16::try_from(max_frame.saturating_add(1)).unwrap_or(u16::MAX);
+    Ok(xmodel_runtime::AnimClip {
+        name: name.to_owned(),
+        framerate,
+        numframes,
+        looping,
+        tracks,
+        notifies: Vec::new(),
+        delta_translation: xmodel_runtime::Translation::Default,
+    })
+}
+
+/// Frame indices as the runtime wants them: dense when they run 0..n with no
+/// gaps, which every NX1 clip so far checked does, and sparse otherwise.
+fn frame_indices(frames: &[u16]) -> xmodel_runtime::FrameIndices {
+    if frames.windows(2).all(|w| w[1] == w[0] + 1) {
+        xmodel_runtime::FrameIndices::Dense
+    } else {
+        xmodel_runtime::FrameIndices::Sparse(frames.to_vec())
+    }
 }
 
 

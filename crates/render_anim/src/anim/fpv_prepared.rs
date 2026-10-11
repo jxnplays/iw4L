@@ -529,20 +529,20 @@ impl FpvPreparationJob {
             self.melee.push(registry.melee_weapon_of(id));
             (id, 0)
         };
-        let mut gun = registry
+        // No NX1 override here any more.
+        //
+        // This used to force the scar2 row's slot onto the parsed
+        // `viewmodel_scar2` cast (54 bones, 30 surfaces), because the row's
+        // `gun_xmodel` edge could resolve to a donor entry instead. The row now
+        // names NX1's own `viewmodel_scar_h` mesh directly, so the normal edge
+        // resolves the right entry and nothing needs overriding. The override
+        // also hard-coded a bone and surface count that no longer matches the
+        // mesh the row actually uses.
+        let gun = registry
             .gun_xmodel_edge_of(id)
             .and_then(|edge| edge.bound_index())
             .filter(|&order| fpv.get_at(order).is_some())
             .map(FpvMeshIndex::from_order);
-        // The scar2 row's edge can resolve to a catalog entry whose surfaces
-        // are still the donor mesh. The prepared slot must use the parsed cast
-        // (54 bones, 30 surfaces). This does not write the row's gun_xmodel.
-        if registry.name_of(id) == asset_game::NX1_SCAR2_BASE
-            && let Some(order) =
-                fpv.parsed_model_order("nx1_viewmodel_scar2", 54, 30)
-        {
-            gun = Some(FpvMeshIndex::from_order(order));
-        }
         if parent == 0 {
             self.guns.push(gun);
         }

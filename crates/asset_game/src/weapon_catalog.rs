@@ -1554,6 +1554,39 @@ impl Default for WeaponRow {
 /// class names it.
 pub const NX1_SCAR2_BASE: &str = "scar2";
 
+/// NX1's own clips for the SCAR Mod 2, by weapon anim slot.
+///
+/// Names are the NX1 `.cast` clip names, which are the same `viewmodel_scar_h_*`
+/// stem the IW4 zone uses for its own SCAR-H clips. They are only unambiguous
+/// because the row's animation route points at Nx1 (see `override_nx1_scar2`);
+/// left on the donor's Iw4 route these same strings resolve to the IW4 clips.
+///
+/// A slot absent from the dump is left empty. That is deliberate: an empty slot
+/// falls back to the bind pose, whereas naming a donor clip that was authored for
+/// a different skeleton is what produced the flicker.
+fn nx1_scar2_anim_slots() -> [Option<String>; WEAPON_ANIM_SLOTS] {
+    let mut slots = [const { None }; WEAPON_ANIM_SLOTS];
+    let mut set = |slot: crate::WeaponAnimSlot, name: &str| {
+        if let Some(cell) = slots.get_mut(slot as usize) {
+            *cell = Some(format!("viewmodel_scar_h_{name}"));
+        }
+    };
+    set(crate::WeaponAnimSlot::Idle, "idle");
+    set(crate::WeaponAnimSlot::Fire, "fire");
+    set(crate::WeaponAnimSlot::AdsFire, "ads_fire");
+    set(crate::WeaponAnimSlot::Reload, "reload");
+    set(crate::WeaponAnimSlot::ReloadEmpty, "reload_empty_alt");
+    set(crate::WeaponAnimSlot::Raise, "pullout");
+    set(crate::WeaponAnimSlot::FirstRaise, "first_time_pullout");
+    set(crate::WeaponAnimSlot::Drop, "putaway");
+    set(crate::WeaponAnimSlot::SprintIn, "sprint_in");
+    set(crate::WeaponAnimSlot::SprintLoop, "sprint_loop");
+    set(crate::WeaponAnimSlot::SprintOut, "sprint_out");
+    set(crate::WeaponAnimSlot::AdsUp, "ads_up");
+    set(crate::WeaponAnimSlot::AdsDown, "ads_down");
+    slots
+}
+
 #[derive(Clone, Debug)]
 pub struct WeaponRegistry {
     rows: Vec<WeaponRow>,
@@ -1681,11 +1714,35 @@ impl WeaponRegistry {
         row.hand_xmodel = Some(hands_name.to_owned());
         row.world_model = Some(world_name.to_owned());
 
-        // Derived from the donor's own names, so they still describe `scar_mp`.
-        // The preparation recipe is deliberately kept: it is what `bind_fpv`
-        // uses to choose the namespace for each component, and it is rebound by
-        // `resolve_fpv_mesh_edges` against the new names. That is also what keeps
-        // the meshes resolving in the Iw4 catalog, where the cast insert put them.
+        // The NX1 clips, not the donor's.
+        //
+        // The donor row's `sz_xanims` are IW4 zone clip names. NX1's own clips
+        // are named `viewmodel_scar_h_*` — the same names the IW4 zone publishes
+        // — so leaving the donor's list in place resolves IW4 clips and drives
+        // the NX1 mesh with IW4 tracks, which is what made the gun flicker. Each
+        // slot is repointed at the NX1 clip for the same action.
+        //
+        // Only clips that exist in the dump are named. A slot with no NX1 clip
+        // stays empty and the engine falls back to the base pose rather than
+        // reaching for a mismatched donor clip.
+        row.sz_xanims = nx1_scar2_anim_slots();
+        row.sz_xanims_right = nx1_scar2_anim_slots();
+        row.sz_xanims_left = [const { None }; WEAPON_ANIM_SLOTS];
+        row.sz_xanim_edges = [AssetEdge::Absent; WEAPON_ANIM_SLOTS];
+        row.sz_xanim_right_edges = [AssetEdge::Absent; WEAPON_ANIM_SLOTS];
+        row.sz_xanim_left_edges = [AssetEdge::Absent; WEAPON_ANIM_SLOTS];
+
+        // The donor's recipe is kept for every component *except* animation.
+        //
+        // `bind_fpv` and `bind_world` use the recipe to choose a namespace per
+        // component, and the meshes must keep resolving in the Iw4 catalog, which
+        // is where `insert_nx1_cast_meshes` put them. Animation is the exception:
+        // the NX1 `.cast` clips are published under Nx1, and with the donor's Iw4
+        // route the identically-named Iw4 zone clips win the lookup. Re-routing
+        // animation alone is what makes the NX1 clips the ones that bind.
+        row.preparation
+            .reroute(WeaponComponent::Animation, NX1);
+
         // The side assemblies are dropped so they are rebuilt against the new gun
         // instead of being reused from the donor's.
         row.fpv_assemblies = [None, None];

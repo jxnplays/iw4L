@@ -11,8 +11,73 @@ pub(crate) const NX1_VIEWMODEL_NAME: &str = "nx1_viewmodel_scar2";
 pub(crate) const NX1_HANDS_NAME: &str = "nx1_viewhands_us_army";
 pub(crate) const NX1_WORLD_NAME: &str = "nx1_weapon_scar2";
 
+/// NX1's own SCAR-H viewmodel.
+///
+/// This is the gun mesh the NX1 clips were authored against, not
+/// `viewmodel_scar2`. The NX1 `.cast` animations track a 35-bone rig whose names
+/// (`j_gun`, `j_grenade_m203`, `j_ammo_shotgun`, and the arm bones) are a subset
+/// of this mesh's, plus the 66-bone viewhands mesh. `viewmodel_scar2` is a
+/// different weapon with 54 bones and almost no matching names, so the clips
+/// cannot drive it.
+pub(crate) const NX1_VIEWMODEL_GUN_NAME: &str = "nx1_viewmodel_scar_h";
+
 const NX1_EXPORT_ROOT: &str =
     "E:\\Call of Duty Future Warfare\\NX1\\output\\one-gun\\tools\\saluki\\exported_files\\nx1\\models";
+
+const NX1_ANIM_ROOT: &str =
+    "E:\\Call of Duty Future Warfare\\NX1\\output\\one-gun\\tools\\saluki\\exported_files\\nx1\\animations";
+
+/// NX1 viewmodel clips for the SCAR Mod 2, published under `AssetNamespace::Nx1`.
+///
+/// These are the clip names the row's `sz_xanims` name. They collide by name with
+/// the IW4 zone's own SCAR-H clips, which is why they are published under Nx1 and
+/// the row's animation route points there: the namespace, not the name, decides
+/// which one binds.
+///
+/// Every `viewmodel_scar_h_*.cast` in the dump is published, not just the ones the
+/// row currently names, so an attachment variant or a later slot needs no new
+/// export path.
+fn insert_nx1_xanims(xanims: &mut asset_anim::XAnimBuild, report: &mut Vec<String>) {
+    let namespace = asset_core::AssetNamespace::Nx1;
+    let Ok(entries) = std::fs::read_dir(NX1_ANIM_ROOT) else {
+        report.push(format!(
+            "nx1 cast anims: cannot read {NX1_ANIM_ROOT}; NX1 clips stay unbound"
+        ));
+        return;
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("viewmodel_scar_h_") && name.ends_with(".cast"))
+        .collect();
+    names.sort();
+    let mut inserted = 0usize;
+    let mut refused: Vec<String> = Vec::new();
+    for file in names {
+        let stem = file.trim_end_matches(".cast").to_owned();
+        let path = format!("{NX1_ANIM_ROOT}\\{file}");
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                refused.push(format!("{stem}: open {error}"));
+                continue;
+            }
+        };
+        match asset_model::cast_xmodel::read_cast_xanim(&bytes, &stem) {
+            Ok(clip) => {
+                xanims.insert_decoded(namespace, &stem, clip);
+                inserted += 1;
+            }
+            Err(error) => refused.push(format!("{stem}: {error}")),
+        }
+    }
+    report.push(format!(
+        "nx1 cast anims: published {inserted} viewmodel_scar_h clips under nx1"
+    ));
+    for line in refused.iter().take(8) {
+        report.push(format!("nx1 cast anims: refused {line}"));
+    }
+}
 
 /// Insert the three NX1 cast meshes into the live builds, before publish.
 ///
@@ -171,6 +236,15 @@ fn insert_nx1_cast_meshes(
         "viewmodel",
         NX1_VIEWMODEL_NAME,
         format!("{NX1_EXPORT_ROOT}\\viewmodel_scar2\\viewmodel_scar2_LOD0.cast"),
+        fpv,
+    );
+    // The gun mesh the NX1 clips actually drive. `viewmodel_scar2` is kept
+    // inserted because the world model and any future direct reference still
+    // name it, but the row's `gun_xmodel` points here.
+    insert(
+        "viewmodel_scar_h",
+        NX1_VIEWMODEL_GUN_NAME,
+        format!("{NX1_EXPORT_ROOT}\\viewmodel_scar_h\\viewmodel_scar_h_LOD0.cast"),
         fpv,
     );
     insert(
@@ -474,6 +548,10 @@ pub(super) async fn walk_prepared_match(
     let map_xanim_count = map_xanims.len();
     let t5_xanim_added = xanims.absorb(t5_xanims);
     xanims.absorb_local(map_xanims);
+    // Before the edges resolve: the NX1 clips have to be in the catalog for the
+    // scar2 row's animation route to bind them rather than the identically-named
+    // IW4 zone clips.
+    insert_nx1_xanims(&mut xanims, &mut report);
     weapons.resolve_sz_xanim_edges(&xanims);
     let weapon_clip_indices = weapons.bound_weapon_xanim_indices();
     let clip_prewarm_started = std::time::Instant::now();

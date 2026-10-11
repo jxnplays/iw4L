@@ -130,6 +130,29 @@ impl WeaponPreparationRecipe {
     pub fn namespace(&self, component: WeaponComponent) -> Option<AssetNamespace> {
         self.routes[component as usize]
     }
+
+    /// Point one component's lookups at a different namespace.
+    ///
+    /// A recipe cloned from a donor carries the donor's routes for every
+    /// component, so an Nx1 row cloned from the Iw4 `scar` row would resolve its
+    /// meshes, animations, and sounds in Iw4. That is correct for the meshes,
+    /// which are read from the Iw4 catalog where the cast insert placed them, but
+    /// wrong for animations: the NX1 `.cast` clips are named `viewmodel_scar_h_*`,
+    /// the same names the Iw4 zone publishes, so the donor's clips win and the
+    /// NX1 mesh ends up driven by Iw4 tracks. That mismatch is what made the gun
+    /// flicker.
+    ///
+    /// Re-routing only Animation to Nx1 lets the NX1 clips win the name lookup
+    /// while everything else keeps resolving where its assets actually live.
+    /// An existing reference recorded for that component is cleared, because a
+    /// reference resolved in the old namespace is not valid in the new one.
+    pub fn reroute(&mut self, component: WeaponComponent, namespace: AssetNamespace) {
+        self.routes[component as usize] = Some(namespace);
+        let component_index = component as usize;
+        self.references
+            .retain(|reference| reference.component as usize != component_index);
+    }
+
     pub(super) fn native(namespace: AssetNamespace) -> Self {
         Self {
             host_namespace: namespace,

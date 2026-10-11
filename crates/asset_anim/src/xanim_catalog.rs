@@ -53,6 +53,16 @@ pub struct XAnimCatalog {
     zones: Vec<ZoneOwner>,
 
     decoded: Mutex<Vec<Option<Arc<AnimClip>>>>,
+
+    /// Clips supplied already decoded, keyed by index.
+    ///
+    /// An NX1 `.cast` animation is not in the IW4 `RawXAnimParts` byte layout, so
+    /// it cannot be stored as a captured entry and run through
+    /// `AnimClip::from_parts`. It is decoded once by
+    /// `asset_model::cast_xmodel::read_cast_xanim` and published here instead.
+    /// Keyed by the same index space as `entries`, so `clip_at` stays the single
+    /// lookup and callers need no NX1-specific path.
+    prebuilt: HashMap<usize, Arc<AnimClip>>,
 }
 
 #[derive(Clone, Debug)]
@@ -72,6 +82,7 @@ impl Default for XAnimCatalog {
             order: Vec::new(),
             zones: Vec::new(),
             decoded: Mutex::new(Vec::new()),
+            prebuilt: HashMap::new(),
         }
     }
 }
@@ -101,6 +112,7 @@ impl Clone for XAnimCatalog {
             order: self.order.clone(),
             zones: self.zones.clone(),
             decoded: Mutex::new(decoded),
+            prebuilt: self.prebuilt.clone(),
         }
     }
 }
@@ -140,7 +152,68 @@ impl XAnimCatalog {
         }
     }
 
-    fn has_key(&self, key: &XAnimKey) -> bool {
+    /// Publish an already-decoded clip under `name`, without captured bytes.
+    ///
+    /// For sources that are not in the `RawXAnimParts` layout. An NX1 `.cast`
+    /// animation is one: `AnimClip::from_parts` would refuse it, so the clip is
+    /// decoded by `read_cast_xanim` and stored here. It occupies a normal index
+    /// so `index_by_name`, `clip`, and `clip_at` all resolve it, and it takes
+    /// precedence over any captured entry of the same name.
+    ///
+    /// `XAnimBuild::insert_decoded` forwards here.
+    pub fn insert_decoded(&mut self, ns: AssetNamespace, name: &str, clip: AnimClip) {
+        let key = XAnimKey::new(ns, name);
+        let pos = match self.indices.get(&key) {
+            Some(&pos) => pos,
+            None => {
+                let pos = self.entries.len();
+                self.indices.insert(key.clone(), pos);
+                self.order.push(key);
+                self.zones.push(ZoneOwner::default());
+                self.entries.push(CapturedXAnim {
+                    namespace: ns,
+                    parts: Arc::new(RawXAnimParts::default()),
+                });
+                self.decoded
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .push(None);
+                pos
+            }
+        };
+        self.prebuilt.insert(pos, Arc::new(clip));
+    }
+
+    /// Absorb another catalog's pre-decoded clips, matching `absorb`'s
+    /// first-wins rule for names the receiver already has.
+    pub fn absorb_decoded(&mut self, mut local: Self) -> usize {
+        let mut added = 0usize;
+        let mut local_entries = std::mem::take(&mut local.entries);
+        for (index, clip) in std::mem::take(&mut local.prebuilt) {
+            let Some(key) = local.order.get(index).cloned() else {
+                continue;
+            };
+            if self.has_key(&key) {
+                continue;
+            }
+            self.prebuilt.insert(self.entries.len(), clip);
+            self.indices.insert(key.clone(), self.entries.len());
+            self.order.push(key.clone());
+            self.zones.push(ZoneOwner::default());
+            self.entries.push(CapturedXAnim {
+                namespace: key.namespace,
+                parts: Arc::new(RawXAnimParts::default()),
+            });
+            self.decoded
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(None);
+            added += 1;
+        }
+        local_entries.clear();
+        added
+    }
+fn has_key(&self, key: &XAnimKey) -> bool {
         self.indices.contains_key(key)
     }
 
@@ -157,6 +230,11 @@ impl XAnimCatalog {
     }
 
     pub fn clip_at(&self, index: usize) -> Option<Arc<AnimClip>> {
+        // A clip supplied already decoded (NX1 `.cast`) wins over the captured
+        // bytes: there are none for it, so the decode below would refuse anyway.
+        if let Some(clip) = self.prebuilt.get(&index) {
+            return Some(Arc::clone(clip));
+        }
         let captured = self.entries.get(index)?;
         {
             let decoded = self
@@ -252,6 +330,7 @@ impl XAnimBuild {
             self.catalog.zones[pos] = self.capture_zone;
             self.catalog.entries[pos] = captured;
             decoded[pos] = None;
+            self.catalog.prebuilt.remove(&pos);
         } else {
             self.catalog
                 .indices
@@ -261,6 +340,12 @@ impl XAnimBuild {
             self.catalog.entries.push(captured);
             decoded.push(None);
         }
+    }
+
+    /// Publish an already-decoded clip, mirroring [`XAnimBuild::insert_decoded`]
+    /// on the underlying catalog.
+    pub fn insert_decoded(&mut self, ns: AssetNamespace, name: &str, clip: AnimClip) {
+        self.catalog.insert_decoded(ns, name, clip);
     }
 
     pub fn absorb(&mut self, mut local: Self) -> usize {
