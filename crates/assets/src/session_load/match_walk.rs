@@ -905,7 +905,7 @@ pub(super) async fn walk_prepared_match(
     // makes this one registration per registry, not a duplicate: it returns
     // early if the row is already present.
     match weapons.override_nx1_scar2(
-        NX1_VIEWMODEL_NAME,
+        NX1_VIEWMODEL_GUN_NAME,
         NX1_HANDS_NAME,
         NX1_WORLD_NAME,
     ) {
@@ -915,6 +915,14 @@ pub(super) async fn walk_prepared_match(
                 .to_owned(),
         ),
     }
+    // The row's animation edges have to be resolved *after* it is created.
+    //
+    // `resolve_sz_xanim_edges` ran much earlier in this walk, over the rows the
+    // capture produced. The scar2 row is added afterwards, so its `sz_xanims`
+    // were never bound and the view reported `no szXAnims[IDLE]`. Re-running the
+    // pass here binds the NX1 clips the row now names. It is a full rebuild, so
+    // the rows resolved earlier are simply resolved again to the same answer.
+    weapons.resolve_sz_xanim_edges(&xanims);
     weapons.resolve_fpv_mesh_edges(&fpv_meshes);
     let bodies = Arc::new(bodies.publish());
     let xanims = Arc::new(xanims.publish());
