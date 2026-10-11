@@ -241,25 +241,26 @@ fn insert_nx1_cast_meshes(
                 }
             };
         let mut bound = 0usize;
-        // Every surface binds the material its cast node names. This must be a
-        // real 3D material in the map catalog: the FPV admission resolves each
-        // surface's material by name, and a name it cannot resolve refuses the
-        // whole viewmodel composition (gun and hands both disappear), not just
-        // that surface. So each cast material is registered as its own row here
-        // rather than borrowing an unrelated one.
-        skel.surface_materials = mats
-            .iter()
-            .map(|mat| {
-                let index = mat.as_deref().map(|m| register_nx1_material(defs, ns, m))?;
-                bound += 1;
-                Some(asset_core::WalkLocalMaterialIndex::from_walk(index))
-            })
-            .collect();
+        // The cast names each surface's material, and `register_nx1_material`
+        // writes a real row for every one of them — but a row invented here has
+        // no decoded colour map (material colour maps are decoded out of the
+        // zone image trees, and these bytes are not in them), so it resolves and
+        // then draws nothing.
+        //
+        // Rather than bind them and have every surface draw blank, the surfaces
+        // are left unbound: `fpv_material`'s pass-material path then hands each
+        // one a real material the session already holds, which is what puts the
+        // gun on screen at all. The names are still reported so the mapping from
+        // surface to cast material is not lost; feeding NX1's own PNG maps
+        // through the image trees replaces this wholesale.
+        let named = mats.iter().flatten().count();
+        skel.surface_materials = vec![None; skel.surface_index_ranges.len()];
         report.push(format!(
-            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} materials={bound}",
+            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} cast_materials={named} unbound_for_pass_material",
             skel.bones.len(),
             skel.surface_index_ranges.len()
         ));
+        let _ = &mut bound;
         Some(skel)
     };
 

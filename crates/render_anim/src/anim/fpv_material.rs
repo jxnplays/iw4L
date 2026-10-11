@@ -10,9 +10,13 @@ pub(super) fn admit_surface(
     admission: &mut FpvMaterialAdmission,
     image_cache: &mut HashMap<u32, Handle<Image>>,
 ) -> FpvSurfaceVerdict {
-    let parsed_cast = entry.skel.name == "nx1_viewmodel_scar2"
-        && entry.skel.bones.len() == 54
-        && entry.skel.surface_index_ranges.len() == 30;
+    // Every mesh this walk reads out of the NX1 `.cast` dump, whichever
+    // variant: the gun the row drives (`nx1_viewmodel_scar_h`), the older
+    // `nx1_viewmodel_scar2`, and NX1's own hands. Keyed by the `nx1_` name
+    // prefix because all of them need the same treatment, and matching one
+    // exact bone/surface count made the pass fall off as soon as the gun mesh
+    // changed — leaving the real gun with no material and nothing on screen.
+    let parsed_cast = entry.skel.name.starts_with("nx1_");
     let edge = entry
         .material_edges
         .get(surface_index)
