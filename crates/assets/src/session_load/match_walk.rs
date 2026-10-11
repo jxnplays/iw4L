@@ -241,41 +241,24 @@ fn insert_nx1_cast_meshes(
                 }
             };
         let mut bound = 0usize;
-        // Prefer a material that already has decoded retail textures.
-        //
-        // A material's colour map is decoded out of the zone image trees, so an
-        // image this walk invents has no bytes there and stays undecoded; a
-        // surface whose material has no decoded colour map never reaches the
-        // draw. That is why the mesh could be composed — every edge bound, the
-        // view built, `inapplicable_surfaces` at zero — and still show nothing.
-        //
-        // `weapon_scar_h` is IW4's own SCAR-H: a real row with real decoded
-        // textures. Binding the NX1 geometry to it proves the whole chain
-        // (mesh, bones, clips, assembly, draw) end to end and puts a correctly
-        // textured gun on screen while NX1's own PNG maps are wired through the
-        // image trees. It is borrowed texture, and it is labelled as such.
-        let borrowed = defs
-            .material_index_by_ns(asset_core::AssetNamespace::Iw4, "weapon_scar_h")
-            .map(|index| index.order());
+        // Every surface binds the material its cast node names. This must be a
+        // real 3D material in the map catalog: the FPV admission resolves each
+        // surface's material by name, and a name it cannot resolve refuses the
+        // whole viewmodel composition (gun and hands both disappear), not just
+        // that surface. So each cast material is registered as its own row here
+        // rather than borrowing an unrelated one.
         skel.surface_materials = mats
             .iter()
             .map(|mat| {
-                let index = match borrowed {
-                    Some(index) => index,
-                    None => {
-                        let index = mat.as_deref().map(|m| register_nx1_material(defs, ns, m))?;
-                        bound += 1;
-                        index
-                    }
-                };
+                let index = mat.as_deref().map(|m| register_nx1_material(defs, ns, m))?;
+                bound += 1;
                 Some(asset_core::WalkLocalMaterialIndex::from_walk(index))
             })
             .collect();
         report.push(format!(
-            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} materials={bound} borrowed={}",
+            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} materials={bound}",
             skel.bones.len(),
-            skel.surface_index_ranges.len(),
-            borrowed.is_some()
+            skel.surface_index_ranges.len()
         ));
         Some(skel)
     };

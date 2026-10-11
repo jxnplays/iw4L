@@ -317,15 +317,37 @@ impl SoldierPresentation {
         hands: Option<(FamilyId, &str)>,
         secondary: bool,
     ) -> Result<SoldierFpvPresentation, String> {
-        let hands = match &self.kit_hands {
-            Err(error) => return Err(error.clone()),
-            Ok(Some(hands)) => hands.clone(),
-            Ok(None) => {
-                let (family, name) = hands.ok_or("soldier weapon hands missing")?;
-                self.bind_hands(FpvHands::FromWeaponDef {
-                    namespace: family,
-                    name: name.to_owned(),
-                })?
+        // A weapon that names its own NX1 view hands is held by them, not by
+        // the soldier kit's.
+        //
+        // The viewmodel otherwise takes its hands from the kit, but the NX1
+        // clips animate the NX1 arm rig *by bone name* (`j_elbow_le`, `j_wrist_*`,
+        // fingers). The IW4 kit hands share those bone names, so the clips
+        // contort them — and the gun, which hangs off the hands' `tag_weapon`
+        // bone, is carried off with them (the muzzle ends up above the camera).
+        // Pairing the NX1 gun with NX1's own hands makes gun, hands and clips
+        // one coherent rig.
+        //
+        // This keys off the `nx1_` name prefix, which no retail hands model
+        // carries, so no existing viewmodel can be routed through it.
+        let use_weapon_hands = hands.as_ref().is_some_and(|(_, name)| name.starts_with("nx1_"));
+        let hands = if use_weapon_hands {
+            let (family, name) = hands.ok_or("soldier weapon hands missing")?;
+            self.bind_hands(FpvHands::FromWeaponDef {
+                namespace: family,
+                name: name.to_owned(),
+            })?
+        } else {
+            match &self.kit_hands {
+                Err(error) => return Err(error.clone()),
+                Ok(Some(hands)) => hands.clone(),
+                Ok(None) => {
+                    let (family, name) = hands.ok_or("soldier weapon hands missing")?;
+                    self.bind_hands(FpvHands::FromWeaponDef {
+                        namespace: family,
+                        name: name.to_owned(),
+                    })?
+                }
             }
         };
         if secondary && !hands.mounts.secondary {
