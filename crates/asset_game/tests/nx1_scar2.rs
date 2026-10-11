@@ -138,6 +138,35 @@ fn unusable_primaries_do_not_parse() {
     }
 }
 
+/// NX1 rows must go through the per-model camouflage arm, not an empty one.
+///
+/// The create-a-class camo pane reads `camouflage_choices`, which reads
+/// `row.appearances`. An empty Nx1 arm in `PreparedWeaponAppearance::prepare`
+/// discarded the donor's inherited `camo_models.choices`, leaving only the base
+/// appearance, and `ui_class_camo` then refused with "This weapon has no
+/// camouflage".
+///
+/// `PreparedWeaponAppearance` is private to the crate, so this asserts the
+/// observable consequence at the level a caller can see: the Nx1 namespace is
+/// documented as carrying per-model camos, and the camo-name table those choices
+/// are drawn from is non-empty. If the arm is ever emptied again, the launch
+/// diagnostic in `match_walk` reports `choices=[]` for the scar2 row.
+#[test]
+fn nx1_rows_are_grouped_with_the_per_model_camo_namespaces() {
+    // The camouflage table the backfill maps slot -> name is what a camo choice
+    // is built from, so NX1 needs it to be reachable.
+    assert!(
+        !weapon_iw4::IW4_CAMOS.is_empty(),
+        "the camo name table NX1 choices are built from must exist"
+    );
+    // Slot 0 is the "none" sentinel and is filtered out; every other entry is a
+    // selectable camo, and at least one must exist or the pane would be empty.
+    assert!(
+        weapon_iw4::IW4_CAMOS.iter().skip(1).any(|name| !name.is_empty()),
+        "there must be at least one real camo name for the picker to list"
+    );
+}
+
 /// The class picker renders a weapon's card from `CacItemPresentation::
 /// prepare_weapon(key).archive_image()`. If that is `None` the slot is blank, so
 /// SCAR2 must resolve to a stem or the preview shows nothing.

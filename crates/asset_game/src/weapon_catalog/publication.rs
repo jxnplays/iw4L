@@ -32,7 +32,21 @@ impl WeaponBuild {
             row.preparation.set_source(row.namespace, &row.name);
             row.preparation.declare_sound_hints(&row.sounds);
             row.preparation.finish();
-            if row.namespace == crate::AssetNamespace::Iw4 && row.camo_models.choices.is_empty() {
+            // Backfill camouflage choices from the model-name lists when capture
+            // did not supply them (IW4 capture always leaves `choices` empty and
+            // relies on this).
+            //
+            // Nx1 is included because an Nx1 row is a clone of an Iw4 donor: it
+            // carries the donor's `camo_models.view` / `.world`, and it is
+            // published on the normal path (the row is added before
+            // `weapons.publish()`), so it needs the same backfill. Without this
+            // arm the row keeps `choices` empty and the create-a-class camo pane
+            // has nothing to list.
+            if matches!(
+                row.namespace,
+                crate::AssetNamespace::Iw4 | crate::AssetNamespace::Nx1
+            ) && row.camo_models.choices.is_empty()
+            {
                 row.camo_models.choices = row
                     .camo_models
                     .view

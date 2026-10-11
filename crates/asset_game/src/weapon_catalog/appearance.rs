@@ -31,8 +31,29 @@ impl PreparedWeaponAppearance {
             },
         }];
         let optional = |value: &str| (!value.is_empty()).then(|| value.to_owned());
+        // Per-model camouflage meshes. Iw4 and Iw5 carry `camo_models` natively.
+        //
+        // Nx1 is here for a specific reason, not as a shortcut. An Nx1 row is a
+        // clone of an Iw4 donor and carries the donor's `camo_models` with it, and
+        // those choices are real: the row is published through the same
+        // `mp/camotable.csv` backfill as any Iw4 row (see `publication.rs`), so
+        // `camo_models.choices` is populated by the time this runs.
+        //
+        // This arm used to be empty. That discarded the inherited choices and left
+        // the row with only the base appearance, and since `camouflage_choices`
+        // reads `appearances`, the create-a-class camo pane saw an empty list and
+        // `ui_class_camo` refused with "This weapon has no camouflage".
+        //
+        // Sharing the arm is correct: the representation is per-model meshes,
+        // which is exactly what the donor's `camo_models.view` / `.world`
+        // describe, and those edges are rebound by `resolve_fpv_mesh_edges` and
+        // `resolve_world_model_edges` using the preparation recipe the row already
+        // carries. Where a camo mesh does not resolve, `map_or` falls back to the
+        // base gun edge, so a missing camo mesh degrades to the plain gun.
         match row.namespace {
-            crate::AssetNamespace::Iw4 | crate::AssetNamespace::Iw5 => {
+            crate::AssetNamespace::Iw4
+            | crate::AssetNamespace::Iw5
+            | crate::AssetNamespace::Nx1 => {
                 appearances.extend(
                     row.camo_models
                         .choices
@@ -74,9 +95,6 @@ impl PreparedWeaponAppearance {
                         }),
                 );
             }
-            // NX1 has no camouflage table in this tree. The base appearance
-            // pushed before this match is the whole list.
-            crate::AssetNamespace::Nx1 => {}
         }
         appearances.into()
     }
