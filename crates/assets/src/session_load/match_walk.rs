@@ -27,6 +27,12 @@ const NX1_EXPORT_ROOT: &str =
 const NX1_ANIM_ROOT: &str =
     "E:\\Call of Duty Future Warfare\\NX1\\output\\one-gun\\tools\\saluki\\exported_files\\nx1\\animations";
 
+/// Where the cast export's PNG maps live, beside the meshes.
+const NX1_IMAGES_ROOT: &str =
+    "E:\\Call of Duty Future Warfare\\NX1\\output\\one-gun\\tools\\saluki\\exported_files\\nx1\\images";
+
+use super::nx1_textures::Nx1MaterialTextures;
+
 /// NX1 viewmodel clips for the SCAR Mod 2, published under `AssetNamespace::Nx1`.
 ///
 /// These are the clip names the row's `sz_xanims` name. They collide by name with
@@ -298,14 +304,51 @@ fn insert_nx1_cast_meshes(
         // the gun on screen with a borrowed texture; wiring NX1's own PNG maps
         // through the image trees replaces the texture while keeping each
         // surface's own cast material.
-        let donor = donor.map(|(authored, _)| *authored);
+        // Bind each surface to its OWN NX1 material, carrying NX1's own decoded
+        // PNG textures.
+        //
+        // A surface draws only when its material edge is both bound and admitting.
+        // A material row invented in this walk cannot admit on its own — a colour
+        // map is normally decoded out of the zone image trees, which hold none of
+        // the NX1 bytes, so the row has no texture and no sorted ordinal. So each
+        // NX1 material is a clone of a real, admitting retail material (donor)
+        // with its colour/normal/specular bindings repointed at NX1's own decoded
+        // maps: real techset (admits) + real NX1 pixels (looks like a SCAR-H).
+        // A material whose PNGs cannot be decoded falls back to the donor so the
+        // surface still draws rather than vanishing.
+        let donor_index = donor.map(|(authored, _)| *authored);
+        let mut textured = 0usize;
         let named = mats.iter().flatten().count();
-        skel.surface_materials = vec![
-            donor.map(asset_core::WalkLocalMaterialIndex::from_walk);
-            skel.surface_index_ranges.len()
-        ];
+        skel.surface_materials = mats
+            .iter()
+            .map(|mat| {
+                let Some(mat) = mat else { return None };
+                let textures = Nx1MaterialTextures {
+                    specular: mat.textures.specular.clone(),
+                    normal: mat.textures.normal.clone(),
+                    albedo: mat.textures.albedo.clone(),
+                    detail: mat.textures.detail.clone(),
+                };
+                let authored = donor_index.and_then(|donor| {
+                    nx1_textures::register_nx1_textured_material(
+                        defs,
+                        ns,
+                        &mat.name,
+                        &textures,
+                        donor,
+                        std::path::Path::new(NX1_IMAGES_ROOT),
+                    )
+                });
+                if authored.is_some() {
+                    textured += 1;
+                }
+                Some(asset_core::WalkLocalMaterialIndex::from_walk(
+                    authored.or(donor_index)?,
+                ))
+            })
+            .collect();
         report.push(format!(
-            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} cast_materials={named} donor={donor:?}",
+            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} cast_materials={named} textured={textured} donor={donor_index:?}",
             skel.bones.len(),
             skel.surface_index_ranges.len()
         ));

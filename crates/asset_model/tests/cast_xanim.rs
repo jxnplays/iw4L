@@ -5,7 +5,7 @@ use asset_model::cast_xmodel::{read_cast_xanim, read_cast_xmodel, read_cast_xmod
 
 const ROOT: &str = r"E:\Call of Duty Future Warfare\NX1\output\one-gun\tools\saluki\exported_files\nx1";
 
-fn scar_h_mesh() -> (asset_model::ModelSkel, Vec<Option<String>>) {
+fn scar_h_mesh() -> (asset_model::ModelSkel, Vec<Option<asset_model::cast_xmodel::CastSurfaceMaterial>>) {
     let path = format!("{ROOT}\\models\\viewmodel_scar_h\\viewmodel_scar_h_LOD0.cast");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     read_cast_xmodel_materials(&bytes, "viewmodel_scar_h")
@@ -36,9 +36,9 @@ fn every_scar_h_surface_names_a_material() {
 /// material resolved to the wrong one would texture the wrong surface.
 #[test]
 fn scar_h_materials_are_the_cast_ones() {
-    let (_, names) = scar_h_mesh();
+    let (_, mats) = scar_h_mesh();
     let distinct: std::collections::BTreeSet<&str> =
-        names.iter().flatten().map(String::as_str).collect();
+        mats.iter().flatten().map(|m| m.name.as_str()).collect();
     assert!(
         distinct.contains("mc\\mtl_weapon_scar_h"),
         "body material missing from {distinct:?}"
@@ -49,6 +49,32 @@ fn scar_h_materials_are_the_cast_ones() {
     );
     for name in distinct {
         assert!(name.starts_with("mc\\mtl_"), "unexpected material {name}");
+    }
+}
+
+/// The body material must resolve to NX1's own PNG maps, and those files must
+/// exist in the dump. Without them the gun would wear a borrowed texture rather
+/// than its own camo.
+#[test]
+fn scar_h_body_material_names_its_own_png_maps() {
+    let (_, mats) = scar_h_mesh();
+    let body = mats
+        .iter()
+        .flatten()
+        .find(|m| m.name == "mc\\mtl_weapon_scar_h")
+        .expect("body material");
+    let tex = &body.textures;
+    let albedo = tex.albedo.as_deref().expect("body albedo");
+    assert!(albedo.ends_with(".png"), "albedo is not a png: {albedo}");
+    for map in [Some(albedo), tex.normal.as_deref(), tex.specular.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        let path = format!("{ROOT}\\images\\{map}");
+        assert!(
+            std::path::Path::new(&path).exists(),
+            "cast names a map that is not in the dump: {path}"
+        );
     }
 }
 

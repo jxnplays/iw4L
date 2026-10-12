@@ -24,6 +24,23 @@ const MAGIC: u32 = 0x7473_6163; // "cast"
 const NODE_MESH: u32 = 0x6873_656d; // "mesh"
 const NODE_BONE: u32 = 0x656e_6f62; // "bone"
 const NODE_MATL: u32 = 0x6c74_616d; // "matl"
+const NODE_FILE: u32 = 0x656c_6966; // "file"
+
+/// The texture maps one cast material names, as PNG file names.
+#[derive(Clone, Debug, Default)]
+pub struct CastMaterialTextures {
+    pub specular: Option<String>,
+    pub normal: Option<String>,
+    pub albedo: Option<String>,
+    pub detail: Option<String>,
+}
+
+/// One surface's material: its CryEngine name plus the PNG maps it declares.
+#[derive(Clone, Debug)]
+pub struct CastSurfaceMaterial {
+    pub name: String,
+    pub textures: CastMaterialTextures,
+}
 const NODE_ANIM: u32 = 0x6d69_6e61; // "anim"
 const NODE_CURV: u32 = 0x7672_7563; // "curv"
 
@@ -518,7 +535,7 @@ fn pack_iw4_vertex(
 pub fn read_cast_xmodel_materials(
     bytes: &[u8],
     name: &str,
-) -> Result<(ModelSkel, Vec<Option<String>>), String> {
+) -> Result<(ModelSkel, Vec<Option<CastSurfaceMaterial>>), String> {
     let mut cursor = Cursor { bytes, at: 0 };
     if cursor.u32()? != MAGIC {
         return Err("cast: magic is not \"cast\"".to_owned());
@@ -538,23 +555,60 @@ pub fn read_cast_xmodel_materials(
     // free to place a mesh before the materials it names; resolving lazily at
     // the end would miss any that do.
     let mut material_names: HashMap<u64, String> = HashMap::new();
+    // id -> that material's texture map (PNG file names per slot).
+    let mut material_maps: HashMap<u64, CastMaterialTextures> = HashMap::new();
+    // Walk state: a material's texture paths live on `file` child nodes visited
+    // immediately after their `matl`, in the same order the `matl` declares its
+    // slots. Track the material being filled and the next slot a `file` lands in.
+    let mut pending: Option<(u64, Vec<&'static str>, usize)> = None;
+    const SLOTS: [&str; 4] = ["specular", "normal", "albedo", "extra0"];
     let mut material_scan = Cursor { bytes, at: 16 };
     walk(&mut material_scan, 0, &mut |id, node| {
-        if id != NODE_MATL {
-            return Ok(());
-        }
-        let Some(name) = node.get("n").and_then(|prop| prop.text.clone()) else {
-            return Ok(());
-        };
-        // The material's own id is one below the lowest texture id it owns. A
-        // material that owns no texture names no slots and has no id to derive,
-        // so it is left out; nothing can reference it either.
-        let owned = ["specular", "normal", "albedo", "extra0"]
-            .into_iter()
-            .filter_map(|slot| node.int64(slot))
-            .min();
-        if let Some(base) = owned {
-            material_names.insert(base.wrapping_sub(1), name);
+        match id {
+            NODE_MATL => {
+                let Some(name) = node.get("n").and_then(|prop| prop.text.clone()) else {
+                    pending = None;
+                    return Ok(());
+                };
+                let declared: Vec<&'static str> = SLOTS
+                    .into_iter()
+                    .filter(|slot| node.int64(slot).is_some())
+                    .collect();
+                // The material's own id is one below the lowest texture id it
+                // owns. A material that owns no texture names no slots and has
+                // no id to derive, so it is left out; nothing references it.
+                let owned = SLOTS.into_iter().filter_map(|slot| node.int64(slot)).min();
+                if let Some(base) = owned {
+                    let id = base.wrapping_sub(1);
+                    material_names.insert(id, name);
+                    pending = Some((id, declared, 0));
+                } else {
+                    pending = None;
+                }
+            }
+            NODE_FILE => {
+                if let Some((id, slots, at)) = pending.as_mut() {
+                    let path = node
+                        .get("p")
+                        .and_then(|prop| prop.text.clone())
+                        .map(|p| {
+                            p.rsplit(['\\', '/']).next().unwrap_or(&p).to_owned()
+                        });
+                    if let Some(path) = path
+                        && let Some(slot) = slots.get(*at)
+                    {
+                        let entry = material_maps.entry(*id).or_default();
+                        match *slot {
+                            "specular" => entry.specular = Some(path),
+                            "normal" => entry.normal = Some(path),
+                            "albedo" => entry.albedo = Some(path),
+                            _ => entry.detail = Some(path),
+                        }
+                        *at += 1;
+                    }
+                }
+            }
+            _ => pending = None,
         }
         Ok(())
     })?;
@@ -571,7 +625,7 @@ pub fn read_cast_xmodel_materials(
     // catalog indices: this reader has no catalog, so it cannot know the row a
     // material will occupy. `match_walk` registers the names and stamps the
     // indices onto `surface_materials` once the catalog exists.
-    let mut surface_material_names: Vec<Option<String>> = Vec::new();
+    let mut surface_material_names: Vec<Option<CastSurfaceMaterial>> = Vec::new();
     let mut bone_names: Vec<String> = Vec::new();
     let mut bones: Vec<BoneBind> = Vec::new();
     let mut bone_parents: Vec<i32> = Vec::new();
@@ -711,12 +765,15 @@ pub fn read_cast_xmodel_materials(
             index_count: mesh_indices.len(),
             rigid,
         });
-        // `m` is the id of the material this surface draws with. An id no
-        // `matl` claims leaves the surface unmaterialed rather than guessing.
+        // `m` is the id of the material this surface draws with, resolved to
+        // its name and the PNG maps it names. An id no `matl` claims
+        // leaves the surface unmaterialed rather than guessing.
         surface_material_names.push(
-            node.int64("m")
-                .and_then(|id| material_names.get(&id))
-                .cloned(),
+            node.int64("m").and_then(|id| {
+                let name = material_names.get(&id)?.clone();
+                let textures = material_maps.get(&id).cloned().unwrap_or_default();
+                Some(CastSurfaceMaterial { name, textures })
+            }),
         );
         Ok(())
     };

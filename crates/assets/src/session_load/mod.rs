@@ -30,6 +30,7 @@ pub use asset_world::WorldDrawPolicy;
 mod common_cache;
 mod common_walks;
 mod match_walk;
+mod nx1_textures;
 mod resident_map;
 
 use common_cache::*;
