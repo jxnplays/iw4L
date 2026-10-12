@@ -764,6 +764,37 @@ pub fn read_cast_xmodel_materials(
         })
         .fold(0.0f32, f32::max);
 
+    // Per-surface part bits: the bones each surface's vertices are actually
+    // weighted to.
+    //
+    // This must be real per-surface data. A part bit is the "this surface
+    // touches this bone" marker; the renderer hides a surface when its part bits
+    // intersect the weapon's hide bits (the attachment-hide tags). A blanket
+    // "every part" mask therefore hides the *entire* mesh the moment the weapon
+    // hides any attachment at all — which is exactly what happened to the NX1
+    // gun: the donor SCAR row hides its sight attachments, so the hide word is
+    // non-zero and all 34 surfaces AND-ed against it and were dropped. Marking
+    // only the bones a surface really uses keeps attachment hiding local to the
+    // attachment.
+    let surface_part_bits: Vec<[u32; 6]> = surfaces
+        .iter()
+        .map(|surface| {
+            let mut bits = [0u32; 6];
+            for skin in &vert_skin[surface.vertex_base..surface.vertex_base + surface.vertex_count]
+            {
+                for (slot, &bone) in skin.bones.iter().enumerate() {
+                    if skin.weights[slot] > 0.0 {
+                        let bone = bone as usize;
+                        if bone < bits.len() * 32 {
+                            bits[bone >> 5] |= 0x8000_0000u32 >> (bone & 31);
+                        }
+                    }
+                }
+            }
+            bits
+        })
+        .collect();
+
     let skel = ModelSkel {
         name: name.to_owned(),
         bone_collision: vec![None; bones.len()],
@@ -788,8 +819,8 @@ pub fn read_cast_xmodel_materials(
             .iter()
             .map(|s| (s.index_base, s.index_count))
             .collect(),
-        // NX1 carries no per-surface part-bit mask, so every axis counts as used.
-        surface_part_bits: vec![[u32::MAX, u32::MAX, 0, 0, 0, 0]; surface_count],
+        // The part bits are the real per-surface bone usage computed above.
+        surface_part_bits,
         surface_deformed: surfaces
             .iter()
             .map(|surface| Some(!surface.rigid))

@@ -297,6 +297,33 @@ fn nx1_gun_satisfies_the_draw_contract() {
     }
 }
 
+/// A surface that marks every bone as "used" collapses the whole mesh the
+/// moment the weapon hides any attachment, because the renderer's hide test is
+/// a part-bit AND against the weapon's hide word. The donor SCAR row hides its
+/// sight attachments, so an all-bones mask hid all 34 gun surfaces at once and
+/// the gun never drew. Part bits must therefore reflect real per-surface usage:
+/// no surface may claim the entire bone range.
+#[test]
+fn nx1_surfaces_do_not_claim_every_bone() {
+    let (skel, _) = scar_h_mesh();
+    for (s, bits) in skel.surface_part_bits.iter().enumerate() {
+        let claimed: usize = bits.iter().map(|w| w.count_ones() as usize).sum();
+        assert!(
+            claimed < skel.bones.len(),
+            "surface {s} claims all {claimed} bones; attachment hiding would drop the \
+             whole mesh (bones={})",
+            skel.bones.len()
+        );
+    }
+    // The body surface must still claim at least the bones it is skinned to,
+    // or it would never be hideable at all and hiding would be meaningless.
+    let any_claims = skel
+        .surface_part_bits
+        .iter()
+        .any(|b| b.iter().any(|w| *w != 0));
+    assert!(any_claims, "no surface claims any bone; hide tags can never apply");
+}
+
 /// NX1's own hands ride the same path, so they get the same check.
 #[test]
 fn nx1_hands_satisfy_the_draw_contract() {
