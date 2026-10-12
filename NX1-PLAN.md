@@ -69,6 +69,23 @@ Nothing online documents this specific bug — it is IW4L-internal, not a public
 issue. The CryEngine docs confirm the viewmodel convention (arms+weapon as one
 `_fp` model, weapon attached to a hand bone), consistent with the files here.
 
+## ✅ BREAKTHROUGH — the gun is visible
+
+Commit `b1f099e` (the ordering fix) is the one. At launch the draw plan finally
+populated:
+
+    fpv table: weapon=7613 gun_xmodel=nx1_viewmodel_scar_h
+               skin=nx1_viewmodel_scar_h bones=35 surfaces=5
+
+`bones` went 0 → 35 and `gun_plan_n` (surfaces) 0 → 5. Playtest confirmed a real
+NX1 first-person weapon renders in IW4L — geometry, optic and launcher profile
+visible, correctly positioned in the viewmodel spot, held by NX1's own hands.
+
+Remaining problems are now cosmetic/asset-level rather than structural:
+- Texture is a borrowed IW4 donor material (drapes brown), not NX1's own maps.
+- Orientation: the muzzle points up-right instead of forward (a `tag_weapon`
+  placement/rotation correction in the rig).
+
 ## Remaining work after a visible gun
 
 - **Real NX1 textures.** Surfaces currently borrow a real IW4 material. Wire
