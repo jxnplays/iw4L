@@ -26,11 +26,42 @@ pub(super) fn admit_surface(
     // an empty glove on screen. Hand them to the draw on a pass material the
     // session already has. This is not a texture bind for the NX1 images.
     if parsed_cast && matches!(edge, AssetEdge::Absent) {
-        if let Some(mat_i) = global.parts().materials.iter().position(|material| {
-            material.textures.iter().any(|(_, texture)| {
-                texture.is_some_and(|binding| binding.semantic == TS_COLOR_MAP)
-            })
-        }) {
+        // Pick a real, opaque surface material. The obvious "first material
+        // with a colour map" is `mc/gfx_missing_fx` — the missing-texture
+        // placeholder, whose blend techset renders the geometry invisible, so
+        // the gun draws with nothing on screen. Skip the placeholders and any
+        // blend/effect material, and take the first genuine surface shader.
+        let pass = global
+            .parts()
+            .materials
+            .iter()
+            .position(|material| {
+                let name = material.name.as_str();
+                let techset = material.technique_set.as_str();
+                let has_colour = material.textures.iter().any(|(_, texture)| {
+                    texture.is_some_and(|binding| binding.semantic == TS_COLOR_MAP)
+                });
+                has_colour
+                    && !name.contains("missing")
+                    && !techset.contains("blend")
+                    && !techset.contains("effect")
+            });
+        if let Some(mat_i) = pass {
+            let name = global
+                .parts()
+                .materials
+                .get(mat_i)
+                .map(|m| m.name.as_str())
+                .unwrap_or("?");
+            static PASS_REPORTED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !PASS_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                diag::info!(
+                    Fpv,
+                    "fpv nx1 pass material: picked #{mat_i} `{name}` techset=`{:?}`",
+                    global.parts().materials[mat_i].technique_set
+                );
+            }
             return admit_material(
                 global,
                 images,

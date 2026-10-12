@@ -171,12 +171,43 @@ impl PreparedFpvModel {
         })
         .ok_or(FpvRigError::Layout("skin layout refused the model"))?;
         if skel.name.starts_with("nx1_") {
+            // Which surfaces actually draw, and how big are they. The gun body
+            // is one large surface; if it is hidden while only tiny attachments
+            // draw, the weapon reads as "no gun" even though surfaces admitted.
+            let mut drawn = String::new();
+            for surface in &layout.surfaces {
+                if !surface.visible || surface.index_count == 0 {
+                    continue;
+                }
+                let _ = surface;
+            }
+            for surface in lod_range.clone() {
+                let verdict = admission.verdict(catalog_entry, surface);
+                let state = match verdict {
+                    Some(FpvSurfaceVerdict::Admitted(_)) => "OK",
+                    Some(FpvSurfaceVerdict::Refused { cause, .. }) => {
+                        diag::info!(Fpv, "fpv nx1 {} surface {surface} refused: {cause}", skel.name);
+                        "REFUSED"
+                    }
+                    Some(FpvSurfaceVerdict::Inapplicable(why)) => {
+                        diag::info!(Fpv, "fpv nx1 {} surface {surface} inapplicable: {why}", skel.name);
+                        "INAPP"
+                    }
+                    None => "NONE",
+                };
+                let idx = skel
+                    .surface_index_ranges
+                    .get(surface)
+                    .map(|&(_, count)| count)
+                    .unwrap_or(0);
+                if state == "OK" {
+                    drawn.push_str(&format!(" {surface}:{idx}"));
+                }
+            }
             diag::info!(
                 Fpv,
-                "fpv nx1 rig {}: layout built with {} surfaces (dest_vertex_n={})",
-                skel.name,
-                layout.surfaces.len(),
-                layout.dest_vertex_n
+                "fpv nx1 rig {}: admitted surfaces (idx:count) ={drawn}",
+                skel.name
             );
         }
 
@@ -265,10 +296,12 @@ if skel.name.starts_with("nx1_") {
     }
     diag::info!(
         Fpv,
-        "fpv nx1 rig {}: surfaces={} admitted={admitted} not_admitted={refused} hidden={hidden_n} packed_ok={}",
+        "fpv nx1 rig {}: surfaces={} admitted={admitted} not_admitted={refused} hidden={hidden_n} packed_ok={} hide_words={:?} part_bits0={:?}",
         skel.name,
         lod_range.len(),
-        skel.packed_vertices.len() == skel.positions.len()
+        skel.packed_vertices.len() == skel.positions.len(),
+        hide.copied(),
+        skel.surface_part_bits.first()
     );
 }
 Ok(Self {
@@ -832,6 +865,46 @@ impl PreparedFpvRig {
             }
         }
         let eye_from_world = tag_view_to_bevy_camera() * world[assembly.view_bone()].inverse();
+        // Placement diagnostic: the gun can pass admission and still be nowhere
+        // near the camera. `eye_from_world` is built from `view_bone` alone, so
+        // if that bone is misplaced (or the gun's bones carry a bad transform)
+        // every vertex lands off-screen with nothing in the log to say so.
+        // Reported once per pose change, not per frame.
+        static PLACEMENT_REPORTED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !PLACEMENT_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let view = world[assembly.view_bone()];
+            let finite = |m: &Mat4| m.to_cols_array().iter().all(|v| v.is_finite());
+            let bad = world.iter().filter(|m| !finite(m)).count();
+            // Eye-space position of the gun and the hands' weapon mount. This is
+            // where the geometry must land to be in front of the camera; anything
+            // with +Z is behind it and will be clipped.
+            let eye_of = |bone: usize| {
+                world
+                    .get(bone)
+                    .map(|w| (eye_from_world * *w).w_axis.truncate())
+            };
+            let gun_part = assembly
+                .parts()
+                .iter()
+                .find(|part| matches!(part.role, asset_game::FpvPartRole::Gun));
+            let gun_bone = gun_part.map(|p| p.bone_base);
+            let hands_part = assembly
+                .parts()
+                .iter()
+                .find(|part| matches!(part.role, asset_game::FpvPartRole::Hands));
+            diag::info!(
+                Fpv,
+                "fpv placement: bones={} view_bone={} view_trans={:?} non_finite={bad} \
+                 gun_base={:?} gun_eye={:?} hands_eye={:?}",
+                world.len(),
+                assembly.view_bone(),
+                view.w_axis.truncate(),
+                gun_bone,
+                gun_bone.and_then(eye_of),
+                hands_part.and_then(|p| eye_of(p.bone_base)),
+            );
+        }
         let lens = assembly
             .camera_bone()
             .map(|camera| tag_camera_lens_local(world[assembly.view_bone()], world[camera]))
