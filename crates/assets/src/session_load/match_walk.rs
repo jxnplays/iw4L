@@ -133,6 +133,35 @@ fn nx1_placeholder_image(
     global.images.len() - 1
 }
 
+/// A material an already-rendering retail viewmodel uses.
+///
+/// Must both resolve (the FPV draw loop skips surfaces whose material edge is
+/// absent) and admit (the render catalog requires a sorted ordinal and an
+/// uploaded colour map). The surest source of one is a retail viewmodel gun that
+/// is already on screen — so scan the FPV catalog for a mesh that already carries
+/// a bound material key and reuse that exact authored row. Inventing a material
+/// here cannot satisfy the second condition: a row written in this walk has no
+/// decoded colour map (colour maps come from the zone image trees, which hold
+/// none of the NX1 bytes) and its techset is not a compiled IW4 techset.
+fn rendering_donor_material(
+    fpv: &asset_model::FpvMeshBuild,
+    global: &asset_material::MaterialDefinitions,
+) -> Option<(usize, String)> {
+    for index in 0..fpv.len() {
+        let entry = fpv.get_at(index)?;
+        let Some(Some(key)) = entry.material_keys.first() else {
+            continue;
+        };
+        if key.name.is_empty() {
+            continue;
+        }
+        if let Some(authored) = global.material_index_by_key(key) {
+            return Some((authored.order(), key.name.clone()));
+        }
+    }
+    None
+}
+
 fn register_nx1_material(
     global: &mut asset_material::MaterialDefinitions,
     namespace: asset_core::AssetNamespace,
@@ -223,6 +252,7 @@ fn insert_nx1_cast_meshes(
     let read_and_stamp = |label: &str,
                        name: &str,
                        path: String,
+                       donor: Option<&(usize, String)>,
                        defs: &mut asset_material::MaterialDefinitions,
                        report: &mut Vec<String>| {
         let bytes = match std::fs::read(&path) {
@@ -253,17 +283,39 @@ fn insert_nx1_cast_meshes(
         // gun on screen at all. The names are still reported so the mapping from
         // surface to cast material is not lost; feeding NX1's own PNG maps
         // through the image trees replaces this wholesale.
+        // Bind every surface to a real, admitting material.
+        //
+        // A surface only reaches the draw when its material *edge* is bound:
+        // the FPV draw loop skips any surface whose edge is absent. The rows
+        // `register_nx1_material` writes cannot serve here — a material invented
+        // in this walk has no decoded colour map (colour maps are decoded from
+        // the zone image trees, which hold none of the NX1 bytes) and its
+        // techset is not a compiled IW4 techset, so it never earns a sorted
+        // ordinal and never admits.
+        //
+        // So the surfaces bind a material the session already holds — one with a
+        // real texture and a real technique, which admits and draws. This puts
+        // the gun on screen with a borrowed texture; wiring NX1's own PNG maps
+        // through the image trees replaces the texture while keeping each
+        // surface's own cast material.
+        let donor = donor.map(|(authored, _)| *authored);
         let named = mats.iter().flatten().count();
-        skel.surface_materials = vec![None; skel.surface_index_ranges.len()];
+        skel.surface_materials = vec![
+            donor.map(asset_core::WalkLocalMaterialIndex::from_walk);
+            skel.surface_index_ranges.len()
+        ];
         report.push(format!(
-            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} cast_materials={named} unbound_for_pass_material",
+            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} cast_materials={named} donor={donor:?}",
             skel.bones.len(),
             skel.surface_index_ranges.len()
         ));
-        let _ = &mut bound;
         Some(skel)
     };
 
+    let donor = rendering_donor_material(fpv, defs);
+    if let Some((_, name)) = &donor {
+        report.push(format!("nx1 donor material: reusing `{name}`"));
+    }
     for (label, name, path) in [
         (
             "viewmodel",
@@ -284,13 +336,13 @@ fn insert_nx1_cast_meshes(
             format!("{NX1_EXPORT_ROOT}\\viewhands_nx_us_army\\viewhands_nx_us_army_LOD0.cast"),
         ),
     ] {
-        if let Some(skel) = read_and_stamp(label, name, path, defs, report) {
+        if let Some(skel) = read_and_stamp(label, name, path, donor.as_ref(), defs, report) {
             fpv.insert_in_defs(ns, skel, defs);
         }
     }
 
     let world_path = format!("{NX1_EXPORT_ROOT}\\weapon_scar2\\weapon_scar2_LOD0.cast");
-    if let Some(skel) = read_and_stamp("world", NX1_WORLD_NAME, world_path, defs, report) {
+    if let Some(skel) = read_and_stamp("world", NX1_WORLD_NAME, world_path, donor.as_ref(), defs, report) {
         world.insert_in_defs(ns, skel, defs);
     }
 }
@@ -919,6 +971,15 @@ pub(super) async fn walk_prepared_match(
     );
     // Bind rigs and tracks to the finished mesh publication, after material linking.
     insert_nx1_cast_meshes(&mut fpv_meshes, &mut world_weapons, &mut global, &mut report);
+    // Stamp the NX1 meshes' material edges now that they are in the catalog.
+    //
+    // `link_materials_after_absorb` (above) already ran `resolve_materials` over
+    // every mesh present at that moment, but the NX1 meshes are inserted after
+    // it. So they keep the `Unresolved` edges they were captured with and never
+    // bind, and a viewmodel surface only draws when its edge is both bound and
+    // admitting — which is why the gun composes, admits its geometry, and still
+    // renders nothing. Re-run the same pass now that they are present.
+    fpv_meshes.resolve_materials(&global);
     let fpv_meshes = Arc::new(fpv_meshes.publish());
     // The match-walk registry is separate from the common set the front menu
     // reads, so `scar2` has to be registered in both. The idempotence guard
