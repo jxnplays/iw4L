@@ -170,6 +170,15 @@ impl PreparedFpvModel {
             !hidden(surface) && admitted(surface).is_some()
         })
         .ok_or(FpvRigError::Layout("skin layout refused the model"))?;
+        if skel.name.starts_with("nx1_") {
+            diag::info!(
+                Fpv,
+                "fpv nx1 rig {}: layout built with {} surfaces (dest_vertex_n={})",
+                skel.name,
+                layout.surfaces.len(),
+                layout.dest_vertex_n
+            );
+        }
 
         let mut refusal = None;
         for surface in lod_range.clone() {
@@ -216,7 +225,53 @@ impl PreparedFpvModel {
                     .is_some_and(leftover_scope_surf_is_lens),
             });
         }
-        Ok(Self {
+        // Diagnostic: for an NX1 mesh, report exactly why surfaces are admitted or
+// dropped at the layout stage. The rig hides any surface that is not admitted
+// and drops the model when nothing is left, all without a log line, so this is
+// the only place that can say whether the gun reached the draw.
+if skel.name.starts_with("nx1_") {
+    let mut admitted = 0usize;
+    let mut refused = 0usize;
+    let mut hidden_n = 0usize;
+    for surface in lod_range.clone() {
+        if hidden(surface) {
+            hidden_n += 1;
+            continue;
+        }
+        match admission.verdict(catalog_entry, surface) {
+            Some(FpvSurfaceVerdict::Admitted(_)) => admitted += 1,
+            Some(FpvSurfaceVerdict::Refused { material, cause }) => {
+                refused += 1;
+                if refused <= 3 {
+                    diag::info!(
+                        Fpv,
+                        "fpv nx1 rig {}: surface {surface} refused, material={material}, cause={cause}",
+                        skel.name
+                    );
+                }
+            }
+            Some(FpvSurfaceVerdict::Inapplicable(why)) => {
+                refused += 1;
+                if refused <= 3 {
+                    diag::info!(
+                        Fpv,
+                        "fpv nx1 rig {}: surface {surface} inapplicable, why={why}",
+                        skel.name
+                    );
+                }
+            }
+            None => refused += 1,
+        }
+    }
+    diag::info!(
+        Fpv,
+        "fpv nx1 rig {}: surfaces={} admitted={admitted} not_admitted={refused} hidden={hidden_n} packed_ok={}",
+        skel.name,
+        lod_range.len(),
+        skel.packed_vertices.len() == skel.positions.len()
+    );
+}
+Ok(Self {
             hide: hide.copied(),
             mesh_identity: catalog.identity(),
             catalog_entry,
