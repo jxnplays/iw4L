@@ -304,48 +304,26 @@ fn insert_nx1_cast_meshes(
         // the gun on screen with a borrowed texture; wiring NX1's own PNG maps
         // through the image trees replaces the texture while keeping each
         // surface's own cast material.
-        // Bind each surface to its OWN NX1 material, carrying NX1's own decoded
-        // PNG maps through the normal image pipeline.
+        // Bind every surface to a real, admitting donor material.
         //
-        // Each NX1 material is a clone of a real, admitting retail material (so
-        // the techset is compiled and the row admits) with its colour/normal/
-        // specular bindings repointed at NX1's maps. The maps ride the pipeline
-        // as BGRA payloads (format 21), which the loader decodes and uploads like
-        // any retail colour map. A material whose PNGs cannot be decoded falls
-        // back to the donor so the surface still draws.
+        // This is the proven-good binding (renders, fires, reloads). Binding the
+        // NX1-material rows directly — whether the maps were hand-installed as GPU
+        // images or carried as BGRA payloads — made every surface admit and yet the
+        // whole viewmodel vanish. A material row minted in this walk, even cloned
+        // from a real donor and given real pixels, is not equivalent to a retail
+        // row for the FPV draw, and the two texture attempts each regressed the
+        // gun. The donor keeps it on screen. Each surface still records its own
+        // cast material and PNG map (the reader resolves them; tests assert it);
+        // binding NX1's own maps is the next task, to be verified offline before
+        // it is allowed to touch the draw.
         let donor_index = donor.map(|(authored, _)| *authored);
-        let mut textured = 0usize;
         let named = mats.iter().flatten().count();
-        skel.surface_materials = mats
-            .iter()
-            .map(|mat| {
-                let Some(mat) = mat else { return None };
-                let textures = Nx1MaterialTextures {
-                    specular: mat.textures.specular.clone(),
-                    normal: mat.textures.normal.clone(),
-                    albedo: mat.textures.albedo.clone(),
-                    detail: mat.textures.detail.clone(),
-                };
-                let authored = donor_index.and_then(|donor| {
-                    nx1_textures::register_nx1_textured_material(
-                        defs,
-                        ns,
-                        &mat.name,
-                        &textures,
-                        donor,
-                        std::path::Path::new(NX1_IMAGES_ROOT),
-                    )
-                });
-                if authored.is_some() {
-                    textured += 1;
-                }
-                Some(asset_core::WalkLocalMaterialIndex::from_walk(
-                    authored.or(donor_index)?,
-                ))
-            })
-            .collect();
+        skel.surface_materials = vec![
+            donor_index.map(asset_core::WalkLocalMaterialIndex::from_walk);
+            skel.surface_index_ranges.len()
+        ];
         report.push(format!(
-            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} cast_materials={named} textured={textured} donor={donor_index:?}",
+            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} cast_materials={named} donor={donor_index:?}",
             skel.bones.len(),
             skel.surface_index_ranges.len()
         ));
