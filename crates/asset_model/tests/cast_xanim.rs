@@ -227,3 +227,83 @@ fn the_paired_gun_mesh_keeps_its_attachment_tags() {
         );
     }
 }
+
+/// The render path validates every surface before it will draw a mesh, and it
+/// validates silently: `draw_build` returns false and the mesh is dropped while
+/// `fpv: equipped` has already logged success. One check is
+/// `packed_vertices.len() == positions.len()`, which gates whether the packed
+/// rows exist at all; the rest are per-surface range checks.
+///
+/// This replays those checks against the real files. A mesh that passes here is
+/// a mesh that reaches the draw; one that fails is invisible for a reason no log
+/// line reports.
+fn draw_build_contract(skel: &asset_model::ModelSkel) -> Result<(), String> {
+    if skel.packed_vertices.len() != skel.positions.len() {
+        return Err(format!(
+            "packed_vertices {} != positions {}: posed_packed goes None and every \
+             surface loses its packed rows",
+            skel.packed_vertices.len(),
+            skel.positions.len()
+        ));
+    }
+    if skel.surface_vertex_ranges.len() != skel.surface_index_ranges.len() {
+        return Err("vertex and index range tables disagree".to_owned());
+    }
+    for (s, &(first, count)) in skel.surface_vertex_ranges.iter().enumerate() {
+        let (istart, icount) = skel.surface_index_ranges[s];
+        let vend = first + count;
+        let iend = istart as usize + icount as usize;
+        if vend > skel.positions.len()
+            || vend > skel.packed_vertices.len()
+            || vend > skel.uvs.len()
+            || vend > skel.normals.len()
+            || vend > skel.colors.len()
+        {
+            return Err(format!(
+                "surface {s}: vertex range {first}..{vend} exceeds a vertex array"
+            ));
+        }
+        if iend > skel.indices.len() {
+            return Err(format!("surface {s}: index range exceeds the index array"));
+        }
+        let slice = &skel.indices[istart as usize..iend];
+        let vmin = *slice.iter().min().unwrap();
+        let vmax = *slice.iter().max().unwrap();
+        let n = (vmax - vmin + 1) as usize;
+        if n != count {
+            return Err(format!(
+                "surface {s}: index span {vmin}..={vmax} implies {n} verts, the \
+                 vertex range says {count}"
+            ));
+        }
+        for &index in slice {
+            if index < first as u32 || index >= vend as u32 {
+                return Err(format!(
+                    "surface {s}: index {index} sits outside its own vertex range \
+                     {first}..{vend}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The gun the row actually drives must survive the draw path's validation.
+#[test]
+fn nx1_gun_satisfies_the_draw_contract() {
+    let (skel, _) = scar_h_mesh();
+    if let Err(e) = draw_build_contract(&skel) {
+        panic!("viewmodel_scar_h would be dropped by draw_build: {e}");
+    }
+}
+
+/// NX1's own hands ride the same path, so they get the same check.
+#[test]
+fn nx1_hands_satisfy_the_draw_contract() {
+    let path = format!("{ROOT}\\models\\viewhands_nx_us_army\\viewhands_nx_us_army_LOD0.cast");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let skel = read_cast_xmodel(&bytes, "hands").expect("hands");
+    if let Err(e) = draw_build_contract(&skel) {
+        panic!("viewhands_nx_us_army would be dropped by draw_build: {e}");
+    }
+}
