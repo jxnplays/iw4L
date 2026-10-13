@@ -124,21 +124,98 @@ fn recentring_puts_both_meshes_in_view_space() {
     }
 }
 
-/// The vertices deliberately do not move: the shift is applied to the root bone so
-/// the skinned result moves while the geometry and the rig stay in agreement. This
-/// pins that the root actually moved, and that the geometry is otherwise untouched.
+/// The recentring has to reach the *pose*, not just the skel.
+///
+/// `DObj::build` reads its bind transforms from `ModelPoseSrc::base_mat`, and that
+/// array is built before the skel is assembled. An earlier version shifted
+/// `skel.bones` after the fact, so the reader's own tests passed — the skel carried
+/// the shift — while `base_mat` kept the file's original values and the FPV
+/// assembly never saw it. The hands stayed 152 units from the camera with the fix
+/// "applied".
+///
+/// This asserts on the pose, which is what the draw actually reads.
 #[test]
-fn recentring_shifts_the_root_bone_not_the_vertices() {
+fn the_pose_carries_the_shift_not_just_the_skel() {
     let path = format!("{ROOT}\\models\\viewhands_nx_us_army\\viewhands_nx_us_army_LOD0.cast");
     let bytes = std::fs::read(&path).expect("hands cast");
-    let (skel, _) = asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, "hands").expect("hands");
+    let (skel, _) =
+        asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, "hands").expect("hands");
 
-    let first = skel.positions[0];
-    let root = skel.bones[0].trans;
-    println!("hands root bone trans after recentring: {root:?}");
-    println!("hands first vertex (unchanged): {first:?}");
+    let pose = skel.pose.as_ref().expect("the hands must carry a pose");
+    let view = pose
+        .bone_names
+        .iter()
+        .position(|n| n == "tag_view")
+        .expect("hands carry a tag_view");
+
+    // `base_mat` is parent-relative; `DObj::build` composes it down the chain.
+    // So the view bone's *world* position is the sum along its chain, and that sum
+    // is what must now be zero.
+    let mut world = [0.0f32; 3];
+    let mut node = view;
+    for _ in 0..pose.bone_names.len() {
+        let Some((_, t)) = pose.base_mat.get(node).copied() else {
+            break;
+        };
+        world[0] += t.x;
+        world[1] += t.y;
+        world[2] += t.z;
+        // Parents sit before children and `parent_list` is a step from the child.
+        if node < pose.num_root_bones {
+            break;
+        }
+        let child = node - pose.num_root_bones;
+        let Some(&step) = pose.parent_list.get(child) else {
+            break;
+        };
+        if step == 0 {
+            break;
+        }
+        node = node - step as usize;
+    }
+    println!("pose base_mat tag_view world = {world:?}");
     assert!(
-        root[2].abs() > 100.0,
+        world[2].abs() < 0.01,
+        "the pose still composes to the original view offset (Z={}); the assembly reads \
+         base_mat, so shifting skel.bones alone does nothing",
+        world[2]
+    );
+}
+
+/// And the root's bind transform the dobj derives everything else from must have
+/// absorbed the same offset.
+#[test]
+fn the_pose_root_absorbs_the_view_offset() {
+    let path = format!("{ROOT}\\models\\viewhands_nx_us_army\\viewhands_nx_us_army_LOD0.cast");
+    let bytes = std::fs::read(&path).expect("hands cast");
+    let (skel, _) =
+        asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, "hands").expect("hands");
+    let pose = skel.pose.as_ref().expect("pose");
+    let root = pose.base_mat.first().copied().expect("base_mat root");
+    println!("pose base_mat root = {root:?}");
+    assert!(
+        root.1.z.abs() > 100.0,
         "the root should have absorbed the ~152 unit view offset, it is {root:?}"
+    );
+}
+
+/// The gun has no `tag_view`, so it must be left exactly as authored. This is the
+/// guard against a fix that moves everything, which would put a working gun off
+/// screen.
+#[test]
+fn a_mesh_without_a_tag_view_is_untouched() {
+    let path = format!("{ROOT}\\models\\viewmodel_scar_h\\viewmodel_scar_h_LOD0.cast");
+    let bytes = std::fs::read(&path).expect("gun cast");
+    let (skel, _) = asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, "gun").expect("gun");
+    let pose = skel.pose.as_ref().expect("gun pose");
+    assert!(
+        !pose.bone_names.iter().any(|n| n == "tag_view"),
+        "the gun is expected to have no tag_view bone"
+    );
+    let root = pose.base_mat.first().copied().expect("gun base_mat root");
+    println!("gun base_mat root = {root:?} (untouched)");
+    assert!(
+        root.1.length() < 0.01,
+        "the gun has no tag_view and must not be shifted, its root moved to {root:?}"
     );
 }

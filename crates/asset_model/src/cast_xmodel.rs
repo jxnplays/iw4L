@@ -278,7 +278,7 @@ impl Node<'_> {
 
     /// The value of a single 64-bit integer property, if it is one.
     ///
-    /// The mesh→material link and the material's own texture ids are both
+    /// The meshâ†’material link and the material's own texture ids are both
     /// `l` (int64) scalars, and both are optional: a mesh without a material
     /// has no `m`, and a material with no textures names none of them.
     fn int64(&self, name: &str) -> Option<u64> {
@@ -368,8 +368,8 @@ struct Surface {
 /// A cast bone carries its local transform, so the pose is the file's own
 /// hierarchy rather than a reconstruction.
 ///
-/// `DObj` reads three of these arrays by *child* index — `bone - num_root_bones`
-/// — and `base_mat` by bone index. Bones are therefore emitted roots first, and
+/// `DObj` reads three of these arrays by *child* index â€” `bone - num_root_bones`
+/// â€” and `base_mat` by bone index. Bones are therefore emitted roots first, and
 /// `parent_list`, `quats` and `trans` carry one entry per non-root bone.
 ///
 /// `parent_list` is a step, not an absolute index: `DObj` recovers the parent as
@@ -529,7 +529,7 @@ fn pack_iw4_vertex(
 ///
 /// The second value is one entry per surface, in surface order: the CryEngine
 /// material path the surface draws with (`mc\mtl_weapon_scar_h` and the rest).
-/// These are names, not catalog rows — this reader holds no catalog, so the
+/// These are names, not catalog rows â€” this reader holds no catalog, so the
 /// caller registers them and writes the resulting indices onto
 /// `skel.surface_materials` itself.
 pub fn read_cast_xmodel_materials(
@@ -547,7 +547,7 @@ pub fn read_cast_xmodel_materials(
     // Materials first, in their own pass over the same container.
     //
     // A `mesh` node names its material by id (`m`, an int64), and a `matl` node
-    // does not state its own id — the id sits one below the lowest of the
+    // does not state its own id â€” the id sits one below the lowest of the
     // texture ids the material owns (`specular`/`normal`/`albedo`/`extra0`,
     // each also an int64). Those ids come from one monotonic counter shared by
     // materials and their textures, so a material's own id is recoverable from
@@ -782,6 +782,27 @@ pub fn read_cast_xmodel_materials(
     if surfaces.is_empty() {
         return Err("cast: no mesh node carried geometry".to_owned());
     }
+    // Recentre *before* the pose is built.
+    //
+    // `DObj::build` takes its bind transforms from `ModelPoseSrc::base_mat`, and
+    // `base_mat`, `trans` and `quats` are all derived from this `bones` array.
+    // Recentring the assembled `skel` afterwards moved `skel.bones` and left the
+    // pose holding the file's original values, so the FPV assembly â€” which reads
+    // bind transforms only through `base_mat` â€” never saw the shift. That is why
+    // the hands stayed 152 units from the camera with the shift "applied" and the
+    // reader's own test passing.
+    let view_offset = tag_view_offset(&bone_names, &bone_parents, &bones);
+    if view_offset != [0.0; 3] {
+        // The root of the view bone's chain: everything hangs off it, so shifting
+        // it shifts the rig without disturbing any parent-relative relationship.
+        if let Some(root) = chain_root(&bone_parents, view_bone_index(&bone_names)) {
+            bones[root].trans = [
+                bones[root].trans[0] + view_offset[0],
+                bones[root].trans[1] + view_offset[1],
+                bones[root].trans[2] + view_offset[2],
+            ];
+        }
+    }
     let pose = build_pose(name, &bone_names, &bone_parents, &bones);
 
     let rigid_verts = vert_skin
@@ -828,7 +849,7 @@ pub fn read_cast_xmodel_materials(
     // touches this bone" marker; the renderer hides a surface when its part bits
     // intersect the weapon's hide bits (the attachment-hide tags). A blanket
     // "every part" mask therefore hides the *entire* mesh the moment the weapon
-    // hides any attachment at all — which is exactly what happened to the NX1
+    // hides any attachment at all â€” which is exactly what happened to the NX1
     // gun: the donor SCAR row hides its sight attachments, so the hide word is
     // non-zero and all 34 surfaces AND-ed against it and were dropped. Marking
     // only the bones a surface really uses keeps attachment hiding local to the
@@ -914,69 +935,65 @@ pub fn read_cast_xmodel_materials(
             (0, 0),
         ],
     };
-    recentre_on_tag_view(&mut skel);
     Ok((skel, surface_material_names))
 }
 
-/// Put a viewmodel mesh in the same space as every other one.
+/// Index of the rig's view point, if it has one.
+fn view_bone_index(bone_names: &[String]) -> Option<usize> {
+    bone_names.iter().position(|name| name == "tag_view")
+}
+
+/// The bone every other bone in this chain ultimately hangs off.
+fn chain_root(parents: &[i32], from: Option<usize>) -> Option<usize> {
+    let mut node = from?;
+    for _ in 0..parents.len() {
+        match parents.get(node).copied().unwrap_or(-1) {
+            p if p < 0 => return Some(node),
+            p => node = p as usize,
+        }
+    }
+    Some(node)
+}
+
+/// Bind-world position of `tag_view`, so it can be moved onto the origin.
 ///
 /// Each NX1 viewmodel is authored around *its own* `tag_view`: the hands carry
-/// theirs at bind Z = +152.4, with the geometry spanning Z = 110..135 in front of
-/// it. The gun carries its `tag_view` at the origin with geometry straddling it.
+/// theirs at bind Z = +152.4 with the geometry spanning Z = 110..135 in front of
+/// it. The gun carries none and is authored around the origin already.
 ///
 /// The FPV assembly resolves one view bone for the whole weapon and places every
 /// part against it, so two meshes authored against different view origins cannot
 /// both be right. Whichever origin wins, the other part ends up hundreds of units
-/// from the camera — admitted, textured, in the draw plan, and invisible.
+/// from the camera: admitted, textured, in the draw plan, and invisible.
 ///
-/// So shift the rig so its own `tag_view` sits at the world origin. The shift goes
-/// on the root bone's bind translation rather than the vertices: skinning is
-/// `bone_matrix * vertex`, so moving the root moves every bone's world transform
-/// and therefore the whole skinned result, with the geometry and the rig staying in
+/// The shift goes on the root bone's bind translation rather than the vertices.
+/// Skinning is `bone_matrix * vertex`, so moving the root moves every bone's world
+/// transform and therefore the whole skinned result, keeping geometry and rig in
 /// agreement. Moving the vertices instead would desynchronise the two.
 ///
-/// Returns the offset applied, for the caller to report.
-pub fn recentre_on_tag_view(skel: &mut ModelSkel) -> [f32; 3] {
-    let Some(view) = skel.tag_view else {
+/// Must run *before* `build_pose`: `DObj::build` takes its bind transforms from
+/// `ModelPoseSrc::base_mat`, and `base_mat`, `trans` and `quats` are all derived
+/// from the same `bones` array.
+fn tag_view_offset(bone_names: &[String], parents: &[i32], bones: &[BoneBind]) -> [f32; 3] {
+    let Some(view) = view_bone_index(bone_names) else {
         return [0.0; 3];
     };
-    if skel.bones.is_empty() {
-        return [0.0; 3];
-    }
-    // `tag_view` in bind world space, walked through the hierarchy: local bind
-    // translations are parent-relative.
     let mut world = [0.0f32; 3];
     let mut node = view;
-    let mut guard = 0usize;
-    let mut chain = Vec::new();
-    while guard < skel.bones.len() {
-        guard += 1;
-        chain.push(node);
-        match skel.parent_of(node) {
-            Some(parent) => node = parent,
-            None => break,
-        }
-    }
-    for &bone in chain.iter().rev() {
-        let t = skel.bones[bone].trans;
+    for _ in 0..bones.len() {
+        let Some(trans) = bones.get(node).map(|b| b.trans) else {
+            break;
+        };
         for axis in 0..3 {
-            world[axis] += t[axis];
+            world[axis] += trans[axis];
+        }
+        match parents.get(node).copied().unwrap_or(-1) {
+            p if p < 0 => break,
+            p => node = p as usize,
         }
     }
-    let offset = [-world[0], -world[1], -world[2]];
-    if offset.iter().all(|v| v.abs() < f32::EPSILON) {
-        return offset;
-    }
-    // The root is the last bone walked: everything hangs off it, so shifting it
-    // shifts the rig without touching any parent's-relative relationship.
-    let root = *chain.last().unwrap_or(&0);
-    let t = &mut skel.bones[root].trans;
-    for axis in 0..3 {
-        t[axis] += offset[axis];
-    }
-    offset
+    [-world[0], -world[1], -world[2]]
 }
-
 /// Read an NX1 `.cast` mesh, discarding the per-surface material names.
 pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
     read_cast_xmodel_materials(bytes, name).map(|(skel, _)| skel)
