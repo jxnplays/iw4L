@@ -150,22 +150,20 @@ impl FpvPreparationJob {
                         if seen_models.insert(order) {
                             models.push(order);
                         }
-                        // An NX1 mesh carries its own geometry: its attachments are
-                        // modelled into it, not toggled by the weapon row. The row is
-                        // the donor SCAR's, so its hide words describe the donor's
-                        // attachment set and cull 29 of the NX1 gun's 34 surfaces --
-                        // which reads on screen as missing geometry and flat panels,
-                        // not as missing textures. The NX1 hands already pass None and
-                        // admit every surface; the gun now does the same.
-                        let hide = if entry.skel.name.starts_with("nx1_") {
-                            None
-                        } else {
-                            part.hide
-                        };
+                        // The donor's hide words cull 29 of the NX1 gun's 34 surfaces, which reads on
+                        // screen as missing geometry and flat panels rather than as missing
+                        // textures. They cannot simply be dropped: the same words select the
+                        // skinning layout, and removing them moved the gun off screen entirely
+                        // (owner-confirmed, a780971). A hide is a pose choice, not only a
+                        // visibility one, so NX1 needs hide words of its own rather than none.
+                        //
+                        // Until those exist, keep the donor's and log what each part is
+                        // given, so the hands are measured rather than inferred.
+                        let hide = part.hide;
                         if entry.skel.name.starts_with("nx1_") {
                             diag::info!(
                                 Fpv,
-                                "fpv nx1 part: role={:?} mesh={} hide={:?} -> None",
+                                "fpv nx1 part: role={:?} mesh={} hide={:?} kept",
                                 part.role,
                                 entry.skel.name,
                                 part.hide
