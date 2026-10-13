@@ -324,6 +324,7 @@ fn insert_nx1_cast_meshes(
         // missing map degrades one surface rather than the whole viewmodel.
         let donor_index = donor.map(|(authored, _)| *authored);
         let mut textured = 0usize;
+        let mut tex_report: Vec<String> = Vec::new();
         let named = mats.iter().flatten().count();
         skel.surface_materials = mats
             .iter()
@@ -343,6 +344,7 @@ fn insert_nx1_cast_meshes(
                         &textures,
                         donor,
                         std::path::Path::new(NX1_IMAGES_ROOT),
+                        &mut tex_report,
                     )
                 });
                 if authored.is_some() {
@@ -1844,3 +1846,4 @@ fn t5_map_under_iw4_rules(
     scripts.set_entities(entities);
     scripts
 }
+

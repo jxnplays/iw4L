@@ -126,8 +126,10 @@ pub fn register_nx1_textured_material(
     textures: &Nx1MaterialTextures,
     donor: usize,
     images_root: &std::path::Path,
+    report: &mut Vec<String>,
 ) -> Option<usize> {
     let mut material = global.materials.get(donor)?.clone();
+    let donor_bindings = material.textures.len();
 
     // Repoint the donor's own bindings rather than replacing the list.
     //
@@ -197,10 +199,38 @@ pub fn register_nx1_textured_material(
     // No decodable maps: keep the donor so the surface still draws (borrowed
     // look) rather than dropping it.
     if swapped == 0 && bindings.is_empty() {
+        report.push(format!(
+            "nx1 tex {material_name}: NO MAPS BOUND (albedo={:?} normal={:?} spec={:?}) -> donor {donor}",
+            textures.albedo, textures.normal, textures.specular
+        ));
         return None;
     }
     // Append any slot the donor had no binding for; everything else is untouched.
     material.textures.extend(bindings);
+
+    // What actually landed, so a surface that draws untextured is named rather
+    // than spotted by eye.
+    //
+    // A surface with no usable colour map falls through to a flat shader colour,
+    // which is what a solid untextured part on the gun is. That can happen when the
+    // cast names no albedo, when the PNG will not read, or when the slot was
+    // repointed at a pre-existing catalog image rather than the NX1 bytes.
+    let slot = |semantic: u8| {
+        material
+            .textures
+            .iter()
+            .find(|b| b.semantic == semantic)
+            .and_then(|b| b.image)
+    };
+    let colour = slot(asset_material::TS_COLOR_MAP);
+    let payload = colour.and_then(|i| global.images.get(i as usize));
+    report.push(format!(
+        "nx1 tex {material_name}: donor_bindings={donor_bindings} swapped={swapped} \
+         colour={colour:?} normal={:?} spec={:?} image={:?}",
+        slot(asset_material::TS_NORMAL_MAP),
+        slot(asset_material::TS_SPECULAR_MAP),
+        payload.map(|i| (i.name.as_str().to_owned(), i.width, i.height, i.format, i.payload.len(), i.decoded.is_some()))
+    ));
 
     material.name = asset_core::AssetRef::decode(material_name);
     material.namespace = namespace;
