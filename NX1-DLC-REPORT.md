@@ -11,7 +11,7 @@ Nobody has publicly done this: an NX1 weapon, parsed out of the leaked Xbox 360
 
 ## What this is, architecturally
 
-NX1 is treated exactly like MW3 / BO1 / BO2 in the IW4L family model — an
+NX1 is treated exactly like MW3 / BO1 / BO2 in the IW4L family model â€” an
 optional top-level category backed by its own asset namespace. The main fork is
 untouched in behaviour; everything lives behind `AssetNamespace::Nx1`.
 
@@ -22,7 +22,7 @@ untouched in behaviour; everything lives behind `AssetNamespace::Nx1`.
 | Discovery | reads the `.ff` | reads the **Saluki export** |
 | Binary format | IW `.ff` | **CryEngine `.cast`** (never publicly parsed) |
 
-NX1 is deliberately *not* a fastfile namespace — it is synthesised from the
+NX1 is deliberately *not* a fastfile namespace â€” it is synthesised from the
 extracted mesh/animation export, so shipping it is a matter of pointing the
 loader at an export directory, the same way an add-on ships its own content.
 
@@ -37,34 +37,34 @@ Percentages are honest: they reflect **verified working state**, not effort spen
 | **NX1 namespace / DLC plumbing** | **100%** | `FamilyId::Nx1` wired through every match arm; top-level CAC category; weapon selectable as `nx1:weapon/scar2_mp` | 12/12 contract tests |
 | **`.cast` mesh reader** | **100%** | Parses the CryEngine chunked container: skeleton, geometry, skinning, attachment tags | 13/13 reader tests |
 | **`.cast` animation reader** | **100%** | All 59 `viewmodel_scar_h` clips parse (30 fps, quats, bone tracks) | 13/13 reader tests |
-| **`.cast` material reader** | **100%** | Decoded `mesh.m`→`matl` id scheme; all 34 surfaces → 24 real `mc\mtl_*` materials with PNG maps | asserted against real files |
-| **Animation binding** | **100%** | 13 NX1 clips bind; IDLE→`viewmodel_scar_h_idle` on `szXAnims[IDLE]` | verified in log |
+| **`.cast` material reader** | **100%** | Decoded `mesh.m`â†’`matl` id scheme; all 34 surfaces â†’ 24 real `mc\mtl_*` materials with PNG maps | asserted against real files |
+| **Animation binding** | **100%** | 13 NX1 clips bind; IDLEâ†’`viewmodel_scar_h_idle` on `szXAnims[IDLE]` | verified in log |
 | **Viewmodel rig** | **100%** | Gun held by NX1's own hands (`nx1_viewhands_us_army`), correct placement, gun+hands in draw plan (`bones=35 surfaces=5`) | verified in log + video |
-| **NX1 textures on gun** | **100%** | NX1's own PNG maps decode, upload and bind per surface; each surface keeps the donor's bindings and metadata, only the image is swapped | `textured=34`, owner-confirmed camo |
-| **NX1 hands rendering** | **~95%** | Drawn; geometry present. Not yet confirmed as visually correct by the owner. | `nx1_viewhands_us_army: admitted=2` (was 0) |
+| **NX1 textures on gun** | **~90%** | NX1 PNG maps decode, upload and bind per surface; each surface keeps the donor bindings and metadata and only swaps the image. All 34 gun surfaces and both hand surfaces have a map present in the dump (verified). Owner still reports missing texture on some surfaces. | `textured=34`, `nx1 images: 41 decoded` |
+| **NX1 hands rendering** | **~90%** | Root cause found and fixed: the hands rig carries its own `tag_view` at bind Z=+152.4, so the assembly single view bone left them 152 units behind the camera. Recentred on their own tag_view; the gun has none and is untouched. Awaiting eyes. | `nx1 bounds hands Z=+110..+135`, fix `bc15603` |
+| **Gun geometry completeness** | **~40%** | Only 5 of 34 surfaces draw. The row hide tags are the donor SCARs and match NX1 bone names, hiding whole subtrees. `hide=None` admits all 34 but moves the gun off screen: a hide selects a skinning layout, not just a visibility. Needs an NX1-owned tag set. | `admitted=5 hidden=29` |
 | **Playable in game** | **~98%** | Renders, aims, fires, reloads, swaps, tracks the view | owner-confirmed in-game |
-| **Viewmodel hold / clipping** | **~40%** | Gun clips the camera on look-up and swells on sprint: NX1's idle pose is authored but there is no matching sprint clip, so the camera moves and the gun does not follow. | owner-observed |
-| **NX1 sounds** | **~5%** | Scoped: 16 WAVs found (not 9). Needs a new loose-WAV audio source — the engine has none. | `NX1-SOUNDS.md` |
-| **Attachments** | **0%** | Class loadout is the donor's; no NX1-specific attachments | — |
-| **Generalise to all guns** | **~10%** | Reader is gun-agnostic; the SCAR2 wiring is scaffolding to be replaced by a general importer | — |
-| **NX1 maps** | **0%** | not started | — |
-
+| **Viewmodel hold / clipping** | **~40%** | Gun clips the camera on look-up and swells on sprint. No NX1 sprint clip is bound, so the camera moves and the gun does not follow. | owner-observed |
+| **NX1 sounds** | **~5%** | Scoped: 16 WAVs found (not 9). Needs a new loose-WAV audio source; the engine has none. | `NX1-SOUNDS.md` |
+| **Attachments** | **0%** | Class loadout is the donor; no NX1-specific attachments | - |
+| **Generalise to all guns** | **~25%** | Reader is gun-agnostic; `recentre_on_tag_view` and the texture binding are gun-agnostic too. The SCAR2 row wiring is still scaffolding. | - |
+| **NX1 maps** | **0%** | not started | - |
 **One playable weapon: ~85%** toward "an NX1 gun that looks and sounds native."
 **The reusable engine (reader/namespace/anim/material/texture pipeline): ~95% done.**
 
 ---
 
-## The texture wall — SOLVED (`9826b2a`, `4892ad9`)
+## The texture wall â€” SOLVED (`9826b2a`, `4892ad9`)
 
 It was **one function**, and it was visible in the log of the build everyone thought was good.
 
 `material_images.rs` dispatched image decode over `[Iw4, T5, Iw5, T6]` only. NX1 image slots were
-filtered out before they reached the decoder — silently, with no `Missing` outcome — so they never
+filtered out before they reached the decoder â€” silently, with no `Missing` outcome â€” so they never
 uploaded. `admit_material` returned `colour map not uploaded`, `build_skin_layout` dropped those
 surfaces, and the rig dropped the model.
 
 Both earlier texture attempts had produced *correct* BGRA payloads that were simply never read.
-And the known-good donor build was already reporting the bug — on the hands:
+And the known-good donor build was already reporting the bug â€” on the hands:
 
 ```
 mc\mtl_nx_us_army_glove refused: colour map not uploaded
@@ -91,12 +91,12 @@ nx1_viewhands_us_army: admitted=2  (was 0)
 ## Code layout (what's reusable vs scaffolding)
 
 **Reusable core** (this is the actual product):
-- `crates/asset_core/src/family.rs` — the `Nx1` family, wired through every match.
-- `crates/asset_model/src/cast_xmodel.rs` (1053 lines) — the `.cast` reader:
+- `crates/asset_core/src/family.rs` â€” the `Nx1` family, wired through every match.
+- `crates/asset_model/src/cast_xmodel.rs` (1053 lines) â€” the `.cast` reader:
   container, skeleton, geometry, materials.
-- `crates/asset_model/src/cast_xanim.rs` — the `.cast` animation reader.
-- `crates/asset_transport/src/namespace_trees.rs` — NX1 discovery (dump, not `.ff`).
-- `crates/assets/src/session_load/nx1_textures.rs` (157 lines) — PNG→texture loader.
+- `crates/asset_model/src/cast_xanim.rs` â€” the `.cast` animation reader.
+- `crates/asset_transport/src/namespace_trees.rs` â€” NX1 discovery (dump, not `.ff`).
+- `crates/assets/src/session_load/nx1_textures.rs` (157 lines) â€” PNGâ†’texture loader.
 
 **Scaffolding to delete** (SCAR2-specific, throws away):
 - The `override_nx1_scar2` row, the donor-material binding, the diagnostic logging.
@@ -104,16 +104,16 @@ nx1_viewhands_us_army: admitted=2  (was 0)
   second gun.
 
 **Tests (25, all passing, all against real dumped files):**
-- `crates/asset_model/tests/cast_xanim.rs` — 13 reader tests (mesh, anim, material,
+- `crates/asset_model/tests/cast_xanim.rs` â€” 13 reader tests (mesh, anim, material,
   draw-contract, part-bits).
-- `crates/asset_game/tests/nx1_scar2.rs` — 12 contract tests (namespace, selection,
+- `crates/asset_game/tests/nx1_scar2.rs` â€” 12 contract tests (namespace, selection,
   redirect).
 
 ---
 
 ## Packaging as a DLC
 
-The end shape — a clean upstream IW4L plus an opt-in NX1 add-on:
+The end shape â€” a clean upstream IW4L plus an opt-in NX1 add-on:
 
 ```
 iw4l/                     # untouched main fork (this branch, minus NX1-specific UI)
@@ -135,7 +135,7 @@ with zero NX1 content present.
 1. **The invisible gun was an ordering bug.** `link_materials_after_absorb`
    stamped material edges *before* `insert_nx1_cast_meshes` added the NX1 meshes,
    so their edges stayed `Unresolved` and never admitted. Found by **reading the
-   source**, not by building — after ~15 build cycles had missed it. One added
+   source**, not by building â€” after ~15 build cycles had missed it. One added
    line (`fpv_meshes.resolve_materials(&global)`) made the gun appear.
 
 2. **Per-surface part bits matter.** An "all bones" mask hid the whole mesh
@@ -162,12 +162,12 @@ CryEngine container confirmed against the real bytes.
 
 ## Next steps (in priority order)
 
-1. **Finish textures** — read why a walk-minted material row doesn't draw;
+1. **Finish textures** â€” read why a walk-minted material row doesn't draw;
    apply NX1's own PNG maps per surface. *(the last big visual blocker)*
-2. **Wire NX1 sounds** — the 9 staged WAVs replace the donor audio.
-3. **Generalise the importer** — a second NX1 gun with no code change, to prove
+2. **Wire NX1 sounds** â€” the 9 staged WAVs replace the donor audio.
+3. **Generalise the importer** â€” a second NX1 gun with no code change, to prove
    the reader is gun-agnostic and delete the SCAR2 scaffolding.
-4. **Maps** — the whole category, once weapons are solid.
+4. **Maps** â€” the whole category, once weapons are solid.
 
 ---
 
