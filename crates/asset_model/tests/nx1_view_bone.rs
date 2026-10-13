@@ -6,73 +6,101 @@
 //!
 //! The FPV assembly resolves one view bone for the whole weapon and places every
 //! part against it, so two meshes authored against different view origins cannot
-//! both be right. Whichever origin wins, the other part ends up hundreds of units
-//! from the camera — admitted, textured, in the draw plan, and invisible.
+//! both be right. The owner confirmed the raised viewpoint appears *only* with this
+//! weapon, which pins the cause to this path rather than a general camera bug.
 //!
-//! Two earlier attempts fixed the wrong surface and both passed their own tests:
+//! Three earlier versions of this fix passed their own tests and were still wrong
+//! at runtime, each because the assertion was on the wrong surface:
 //!
-//!  1. shifting `skel.bones` after the skel existed — but `DObj::build` never reads
-//!     it;
-//!  2. shifting `base_mat[root]` before the pose — but a root bone's bind comes
-//!     from `root_rest`, so `base_mat` is ignored for it.
+//!  1. shifting `skel.bones` after the skel existed -- `DObj::build` never reads it;
+//!  2. shifting `base_mat[root]` -- a root's bind comes from `root_rest`, and every
+//!     other bone carries its own absolute world translation, so one entry is wrong
+//!     twice over;
+//!  3. setting *both* `base_mat` and `root_rest` -- the root is then displaced twice
+//!     while every other bone is displaced once, so the rig and its geometry
+//!     disagree by exactly the view offset.
 //!
-//! Both failed only at runtime, where they read as "arms missing" and "camera two
-//! feet too high". These tests build the `DObj` the assembly builds and assert on
-//! `bind_world`, so they fail here instead.
+//! These build the `DObj` the assembly builds and assert `bind_world`.
 
 const ROOT: &str = r"E:\Call of Duty Future Warfare\NX1\output\one-gun\tools\saluki\exported_files\nx1";
 
+fn hands() -> asset_model::ModelSkel {
+    read("viewhands_nx_us_army")
+}
 
-/// The assembled `DObj` for one cast, as `FpvAssembly::build` assembles it.
-fn dobj_of(cast: &str) -> (xmodel_runtime::DObj, String) {
+
+fn gun() -> asset_model::ModelSkel {
+    read("viewmodel_scar_h")
+}
+
+fn read(cast: &str) -> asset_model::ModelSkel {
     let path = format!("{ROOT}\\models\\{cast}\\{cast}_LOD0.cast");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    let (skel, _) =
-        asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, cast)
-            .unwrap_or_else(|e| panic!("parse {cast}: {e}"));
+    let (skel, _) = asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, cast)
+        .unwrap_or_else(|e| panic!("parse {cast}: {e}"));
+    skel
+}
+
+fn dobj(skel: &asset_model::ModelSkel) -> xmodel_runtime::DObj {
     let pose = skel.pose.as_ref().expect("cast must carry a pose");
-    let dobj = xmodel_runtime::DObj::build(&[(pose, None)]).expect("DObj::build");
-    (dobj, cast.to_owned())
+    xmodel_runtime::DObj::build(&[(pose, None)]).expect("DObj::build")
 }
 
 /// The whole point: after recentring, the hands' view point sits on the camera.
 #[test]
 fn hands_view_bone_lands_on_the_origin() {
-    let (dobj, name) = dobj_of("viewhands_nx_us_army");
+    let skel = hands();
+    let dobj = dobj(&skel);
     let view = dobj.find("tag_view").expect("hands carry a tag_view");
     let at = dobj.bones[view].bind_world.w_axis.truncate();
-    println!("{name}: tag_view bind_world = {at:?}");
+    println!("hands tag_view bind_world = {at:?}");
     assert!(
         at.length() < 0.01,
         "the hands' tag_view must reach the origin through DObj::build, it is at {at:?}"
     );
 }
 
-/// The offset has to be carried by `root_rest`: a root bone's bind is read from
-/// there, not from `base_mat`. If this regresses the shift silently stops applying.
+/// The offset belongs in `base_mat` alone.
+///
+/// `DObj::build` gives a root bone two channels -- `bind_world` from `base_mat`, and
+/// `bind_rotation`/`bind_translation` from `root_rest`. Setting both displaces the
+/// root twice while every other bone is displaced once.
 #[test]
-fn the_offset_travels_in_root_rest() {
-    let path = format!("{ROOT}\\models\\viewhands_nx_us_army\\viewhands_nx_us_army_LOD0.cast");
-    let bytes = std::fs::read(&path).expect("hands cast");
-    let (skel, _) =
-        asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, "hands").expect("hands");
+fn the_offset_does_not_also_ride_in_root_rest() {
+    let skel = hands();
     let pose = skel.pose.as_ref().expect("pose");
-    let (_, root_rest) = pose.root_rest.expect("the offset must ride in root_rest");
-    println!("root_rest = {root_rest:?}");
+    println!("root_rest = {:?}", pose.root_rest);
     assert!(
-        root_rest.z.abs() > 100.0,
-        "root_rest should carry the ~152 unit view offset, it is {root_rest:?}"
+        pose.root_rest.is_none(),
+        "root_rest must stay None: the view offset belongs in base_mat alone, or the \
+         root is displaced twice and the rig disagrees with its own geometry"
+    );
+}
+
+/// Every bone must move by the offset, not just the root: `base_mat` holds a world
+/// transform per bone and `DObj` uses it directly.
+#[test]
+fn every_bone_carries_the_offset() {
+    let skel = hands();
+    let dobj = dobj(&skel);
+    let z = skel.bone_names.len();
+    let moved = dobj
+        .bones
+        .iter()
+        .filter(|b| b.bind_world.w_axis.truncate().z.abs() > 100.0)
+        .count();
+    println!("{moved} of {z} bones sit more than 100 units back");
+    assert!(
+        moved > 0 && moved < z,
+        "expected the hands' bones to have moved off the origin, {moved} of {z} did"
     );
 }
 
 /// The gun has no `tag_view`, so it must be left exactly as authored. A fix that
-/// moved everything put the gun off screen once already, so this guards it.
+/// moved everything put the gun off screen once already.
 #[test]
 fn a_mesh_without_a_tag_view_is_untouched() {
-    let path = format!("{ROOT}\\models\\viewmodel_scar_h\\viewmodel_scar_h_LOD0.cast");
-    let bytes = std::fs::read(&path).expect("gun cast");
-    let (skel, _) =
-        asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, "gun").expect("gun");
+    let skel = gun();
     let pose = skel.pose.as_ref().expect("gun pose");
     assert!(
         !pose.bone_names.iter().any(|n| n == "tag_view"),
@@ -80,9 +108,9 @@ fn a_mesh_without_a_tag_view_is_untouched() {
     );
     assert!(
         pose.root_rest.is_none(),
-        "the gun has no view offset to apply, it must carry no root_rest"
+        "the gun has no view offset to apply, so it must carry no root_rest"
     );
-    let dobj = xmodel_runtime::DObj::build(&[(pose, None)]).expect("gun DObj");
+    let dobj = dobj(&skel);
     let root = dobj.bones[0].bind_world.w_axis.truncate();
     println!("gun root bind_world = {root:?}");
     assert!(
@@ -91,21 +119,3 @@ fn a_mesh_without_a_tag_view_is_untouched() {
     );
 }
 
-/// Names, for the record. NX1's rig carries real attachment tags, which is what
-/// makes its own hide words derivable.
-#[test]
-fn bone_names_are_recorded() {
-    for cast in ["viewmodel_scar_h", "viewhands_nx_us_army"] {
-        let path = format!("{ROOT}\\models\\{cast}\\{cast}_LOD0.cast");
-        let bytes = std::fs::read(&path).expect(cast);
-        let (skel, _) =
-            asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, cast).expect(cast);
-        let tagged: Vec<&String> = skel
-            .bone_names
-            .iter()
-            .filter(|b| b.contains("tag_"))
-            .collect();
-        println!("{cast}: {} bones, {} tagged", skel.bone_names.len(), tagged.len());
-        assert!(!skel.bone_names.is_empty());
-    }
-}

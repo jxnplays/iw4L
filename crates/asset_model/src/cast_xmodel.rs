@@ -278,7 +278,7 @@ impl Node<'_> {
 
     /// The value of a single 64-bit integer property, if it is one.
     ///
-    /// The meshÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢material link and the material's own texture ids are both
+    /// The meshÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢material link and the material's own texture ids are both
     /// `l` (int64) scalars, and both are optional: a mesh without a material
     /// has no `m`, and a material with no textures names none of them.
     fn int64(&self, name: &str) -> Option<u64> {
@@ -368,8 +368,8 @@ struct Surface {
 /// A cast bone carries its local transform, so the pose is the file's own
 /// hierarchy rather than a reconstruction.
 ///
-/// `DObj` reads three of these arrays by *child* index ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `bone - num_root_bones`
-/// ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â and `base_mat` by bone index. Bones are therefore emitted roots first, and
+/// `DObj` reads three of these arrays by *child* index ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â `bone - num_root_bones`
+/// ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â and `base_mat` by bone index. Bones are therefore emitted roots first, and
 /// `parent_list`, `quats` and `trans` carry one entry per non-root bone.
 ///
 /// `parent_list` is a step, not an absolute index: `DObj` recovers the parent as
@@ -466,7 +466,7 @@ fn build_pose(
     let ordered_names: Vec<String> = order.iter().map(|index| bone_names[*index].clone()).collect();
     // The offset has to be applied to every `base_mat` entry.
         //
-        // `base_mat` holds a *world* transform per bone — `DObj::build` does
+        // `base_mat` holds a *world* transform per bone Ã¢â‚¬â€ `DObj::build` does
         // `Mat4::from_rotation_translation(bq, bt)` and uses it as `bind_world`
         // directly, with no parent accumulation. `root_rest` is a different thing:
         // it feeds `bind_rotation`/`bind_translation` and is ignored for
@@ -507,20 +507,20 @@ fn build_pose(
         // `base_mat` for it entirely:
         //
         //     let (rotation, translation) = model.root_rest
-        //         .filter(|_| bone == 0).unwrap_or((Quat::IDENTITY, Vec3::ZERO));
+        // The offset travels in `base_mat` only.
         //
-        // So shifting `base_mat[0]` moved nothing the assembly could see: the root
-        // stayed at identity and `tag_view` still composed to +152.4. That is why
-        // the reader's own test passed while the viewmodel stayed 152 units from
-        // the camera, and why the camera eye ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which derives from `view_bone` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
-        // was raised.
-        root_rest: (root_offset != [0.0; 3])
-            .then(|| (bevy::math::Quat::IDENTITY, bevy::math::Vec3::from_array(root_offset))),
+        // `DObj::build` gives a root bone TWO channels: `bind_world` from
+        // `base_mat[bone]`, and `bind_rotation`/`bind_translation` from
+        // `root_rest`. Setting both to the same offset displaces the root twice
+        // while every other bone is displaced once, so the rig and its geometry
+        // disagree by exactly the view offset -- the arms land 152 units out and
+        // the camera eye, which derives from `view_bone`, rides high. The owner
+        // confirmed the raised viewpoint appears only with this weapon, which is
+        // what pinned it to this path rather than to a general camera bug.
+        root_rest: None,
     })
 }
 
-/// One rotation as the packed i16 xyzw `DObj` reads: each component scaled by
-/// 32767 and rounded to nearest, clamped so a component at or past 1.0 does not
 /// wrap into the opposite sign.
 fn quantize_quat(quat: [f32; 4]) -> [i16; 4] {
     let pack = |value: f32| -> i16 {
@@ -566,7 +566,7 @@ fn pack_iw4_vertex(
 ///
 /// The second value is one entry per surface, in surface order: the CryEngine
 /// material path the surface draws with (`mc\mtl_weapon_scar_h` and the rest).
-/// These are names, not catalog rows ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â this reader holds no catalog, so the
+/// These are names, not catalog rows ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â this reader holds no catalog, so the
 /// caller registers them and writes the resulting indices onto
 /// `skel.surface_materials` itself.
 pub fn read_cast_xmodel_materials(
@@ -584,7 +584,7 @@ pub fn read_cast_xmodel_materials(
     // Materials first, in their own pass over the same container.
     //
     // A `mesh` node names its material by id (`m`, an int64), and a `matl` node
-    // does not state its own id ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the id sits one below the lowest of the
+    // does not state its own id ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â the id sits one below the lowest of the
     // texture ids the material owns (`specular`/`normal`/`albedo`/`extra0`,
     // each also an int64). Those ids come from one monotonic counter shared by
     // materials and their textures, so a material's own id is recoverable from
@@ -873,7 +873,7 @@ pub fn read_cast_xmodel_materials(
     // touches this bone" marker; the renderer hides a surface when its part bits
     // intersect the weapon's hide bits (the attachment-hide tags). A blanket
     // "every part" mask therefore hides the *entire* mesh the moment the weapon
-    // hides any attachment at all ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â which is exactly what happened to the NX1
+    // hides any attachment at all ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â which is exactly what happened to the NX1
     // gun: the donor SCAR row hides its sight attachments, so the hide word is
     // non-zero and all 34 surfaces AND-ed against it and were dropped. Marking
     // only the bones a surface really uses keeps attachment hiding local to the
