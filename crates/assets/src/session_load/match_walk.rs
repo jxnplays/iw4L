@@ -360,6 +360,8 @@ fn insert_nx1_cast_meshes(
             skel.bones.len(),
             skel.surface_index_ranges.len()
         ));
+        // One line per material: what its colour slot ended up pointing at.
+        report.append(&mut tex_report);
         // Bounds of the packed positions, in the units the FPV draw uses. A viewmodel
         // is authored in view space: its geometry must sit in front of the camera and
         // near it. A mesh authored around the origin, or one whose extent is metres
