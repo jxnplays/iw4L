@@ -40,10 +40,12 @@ Percentages are honest: they reflect **verified working state**, not effort spen
 | **`.cast` material reader** | **100%** | Decoded `mesh.m`→`matl` id scheme; all 34 surfaces → 24 real `mc\mtl_*` materials with PNG maps | asserted against real files |
 | **Animation binding** | **100%** | 13 NX1 clips bind; IDLE→`viewmodel_scar_h_idle` on `szXAnims[IDLE]` | verified in log |
 | **Viewmodel rig** | **100%** | Gun held by NX1's own hands (`nx1_viewhands_us_army`), correct placement, gun+hands in draw plan (`bones=35 surfaces=5`) | verified in log + video |
-| **NX1 textures on gun** | **~95%** | NX1's own PNG maps now decode and upload; each surface binds its own cast material. Awaiting visual confirmation. | `nx1 images: 41 decoded`, `colour map not uploaded: 5 → 0` |
-| **NX1 hands rendering** | **~95%** | Drawn for the first time — they were dead in every earlier build. | `nx1_viewhands_us_army: admitted=2` (was 0) |
-| **Playable in game** | **~95%** | Gun renders, aims, fires (ammo decrements), reloads, swaps | video confirmed |
+| **NX1 textures on gun** | **100%** | NX1's own PNG maps decode, upload and bind per surface; each surface keeps the donor's bindings and metadata, only the image is swapped | `textured=34`, owner-confirmed camo |
+| **NX1 hands rendering** | **~95%** | Drawn; geometry present. Not yet confirmed as visually correct by the owner. | `nx1_viewhands_us_army: admitted=2` (was 0) |
+| **Playable in game** | **~98%** | Renders, aims, fires, reloads, swaps, tracks the view | owner-confirmed in-game |
+| **Viewmodel hold / clipping** | **~40%** | Gun clips the camera on look-up and swells on sprint: NX1's idle pose is authored but there is no matching sprint clip, so the camera moves and the gun does not follow. | owner-observed |
 | **NX1 sounds** | **~5%** | Scoped: 16 WAVs found (not 9). Needs a new loose-WAV audio source — the engine has none. | `NX1-SOUNDS.md` |
+| **Attachments** | **0%** | Class loadout is the donor's; no NX1-specific attachments | — |
 | **Generalise to all guns** | **~10%** | Reader is gun-agnostic; the SCAR2 wiring is scaffolding to be replaced by a general importer | — |
 | **NX1 maps** | **0%** | not started | — |
 
