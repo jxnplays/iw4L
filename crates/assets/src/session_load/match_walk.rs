@@ -244,10 +244,10 @@ fn insert_nx1_cast_meshes(
     world: &mut asset_model::WorldWeaponBuild,
     defs: &mut asset_material::MaterialDefinitions,
     report: &mut Vec<String>,
-) {
+) -> Option<asset_core::AssetNamespace> {
     let Some(ns) = fpv.map_namespace else {
         report.push("nx1 cast insert: the fpv catalog has no map namespace, nothing inserted".to_owned());
-        return;
+        return None;
     };
     report.push(format!("nx1 cast insert: map namespace is {}", ns.as_str()));
 
@@ -394,6 +394,7 @@ fn insert_nx1_cast_meshes(
     if let Some(skel) = read_and_stamp("world", NX1_WORLD_NAME, world_path, donor.as_ref(), defs, report) {
         world.insert_in_defs(ns, skel, defs);
     }
+    Some(ns)
 }
 
 pub(super) async fn walk_prepared_match(
@@ -1019,7 +1020,8 @@ pub(super) async fn walk_prepared_match(
         &mut report,
     );
     // Bind rigs and tracks to the finished mesh publication, after material linking.
-    insert_nx1_cast_meshes(&mut fpv_meshes, &mut world_weapons, &mut global, &mut report);
+    let nx1_namespace =
+        insert_nx1_cast_meshes(&mut fpv_meshes, &mut world_weapons, &mut global, &mut report);
     // Decode the NX1 maps now that the NX1 materials that reference them exist.
     //
     // The colour-map decode pass earlier in this walk ran before this insert, so
@@ -1028,18 +1030,25 @@ pub(super) async fn walk_prepared_match(
     // not uploaded` and drops the surface — the whole viewmodel, hands included.
     // Ordering matters twice over: the images must exist (this insert) before the
     // decode can select them, and be decoded before the render catalog is built.
-    {
+    //
+    // The namespace is the one the insert actually wrote them under — the map's,
+    // not `Nx1` — because these rows have to live in the catalog the map renders
+    // from. Asking for `Nx1` here decodes nothing at all.
+    if let Some(namespace) = nx1_namespace {
         let stage = progress.begin_scoped(StageId::Images, "nx1", None);
         let decoded = asset_material::material_images::decode_images_for_namespace(
             &image_trees,
             &mut global,
-            asset_core::AssetNamespace::Nx1,
+            namespace,
             &stage,
             load_pool(),
         );
         stage.finish_from(&decoded);
         match decoded {
-            Ok(n) => report.push(format!("nx1 images: {n} decoded from the export")),
+            Ok(n) => report.push(format!(
+                "nx1 images: {n} decoded from the export (namespace {})",
+                namespace.as_str()
+            )),
             Err(error) => report.push(format!("nx1 images: {error}")),
         }
     }
