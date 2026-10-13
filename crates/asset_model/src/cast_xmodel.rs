@@ -852,7 +852,7 @@ pub fn read_cast_xmodel_materials(
         })
         .collect();
 
-    let skel = ModelSkel {
+    let mut skel = ModelSkel {
         name: name.to_owned(),
         bone_collision: vec![None; bones.len()],
         bone_names,
@@ -914,7 +914,67 @@ pub fn read_cast_xmodel_materials(
             (0, 0),
         ],
     };
+    recentre_on_tag_view(&mut skel);
     Ok((skel, surface_material_names))
+}
+
+/// Put a viewmodel mesh in the same space as every other one.
+///
+/// Each NX1 viewmodel is authored around *its own* `tag_view`: the hands carry
+/// theirs at bind Z = +152.4, with the geometry spanning Z = 110..135 in front of
+/// it. The gun carries its `tag_view` at the origin with geometry straddling it.
+///
+/// The FPV assembly resolves one view bone for the whole weapon and places every
+/// part against it, so two meshes authored against different view origins cannot
+/// both be right. Whichever origin wins, the other part ends up hundreds of units
+/// from the camera — admitted, textured, in the draw plan, and invisible.
+///
+/// So shift the rig so its own `tag_view` sits at the world origin. The shift goes
+/// on the root bone's bind translation rather than the vertices: skinning is
+/// `bone_matrix * vertex`, so moving the root moves every bone's world transform
+/// and therefore the whole skinned result, with the geometry and the rig staying in
+/// agreement. Moving the vertices instead would desynchronise the two.
+///
+/// Returns the offset applied, for the caller to report.
+pub fn recentre_on_tag_view(skel: &mut ModelSkel) -> [f32; 3] {
+    let Some(view) = skel.tag_view else {
+        return [0.0; 3];
+    };
+    if skel.bones.is_empty() {
+        return [0.0; 3];
+    }
+    // `tag_view` in bind world space, walked through the hierarchy: local bind
+    // translations are parent-relative.
+    let mut world = [0.0f32; 3];
+    let mut node = view;
+    let mut guard = 0usize;
+    let mut chain = Vec::new();
+    while guard < skel.bones.len() {
+        guard += 1;
+        chain.push(node);
+        match skel.parent_of(node) {
+            Some(parent) => node = parent,
+            None => break,
+        }
+    }
+    for &bone in chain.iter().rev() {
+        let t = skel.bones[bone].trans;
+        for axis in 0..3 {
+            world[axis] += t[axis];
+        }
+    }
+    let offset = [-world[0], -world[1], -world[2]];
+    if offset.iter().all(|v| v.abs() < f32::EPSILON) {
+        return offset;
+    }
+    // The root is the last bone walked: everything hangs off it, so shifting it
+    // shifts the rig without touching any parent's-relative relationship.
+    let root = *chain.last().unwrap_or(&0);
+    let t = &mut skel.bones[root].trans;
+    for axis in 0..3 {
+        t[axis] += offset[axis];
+    }
+    offset
 }
 
 /// Read an NX1 `.cast` mesh, discarding the per-surface material names.
