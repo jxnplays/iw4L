@@ -59,21 +59,32 @@ fn hands_view_bone_lands_on_the_origin() {
         "the hands' tag_view must reach the origin through DObj::build, it is at {at:?}"
     );
 }
-
-/// The offset belongs in `base_mat` alone.
+/// The offset belongs in *both* channels, because they feed different consumers.
 ///
-/// `DObj::build` gives a root bone two channels -- `bind_world` from `base_mat`, and
-/// `bind_rotation`/`bind_translation` from `root_rest`. Setting both displaces the
-/// root twice while every other bone is displaced once.
+/// `bind_world` (from `base_mat`) drives skinning. `bind_translation` (from
+/// `root_rest`) drives the posed world the FPV assembly reads for the camera eye.
+/// They are not summed.
+///
+/// Removing `root_rest` put `view_trans` back to 152.4 and the viewpoint high again
+/// while surface admission kept improving -- which is what gave the change away.
 #[test]
-fn the_offset_does_not_also_ride_in_root_rest() {
+fn the_offset_rides_in_both_channels() {
     let skel = hands();
     let pose = skel.pose.as_ref().expect("pose");
-    println!("root_rest = {:?}", pose.root_rest);
+    let root_rest = pose.root_rest.expect("the posed world needs the offset too");
+    println!("root_rest = {root_rest:?}");
     assert!(
-        pose.root_rest.is_none(),
-        "root_rest must stay None: the view offset belongs in base_mat alone, or the \
-         root is displaced twice and the rig disagrees with its own geometry"
+        root_rest.1.z.abs() > 100.0,
+        "root_rest carries the view offset for the posed world, it is {root_rest:?}"
+    );
+
+    // And the skinned geometry needs it independently.
+    let dobj = dobj(&skel);
+    let view = dobj.find("tag_view").expect("hands carry a tag_view");
+    let at = dobj.bones[view].bind_world.w_axis.truncate();
+    assert!(
+        at.length() < 0.01,
+        "base_mat must carry the same offset for skinning, tag_view is at {at:?}"
     );
 }
 

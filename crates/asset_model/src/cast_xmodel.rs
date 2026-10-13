@@ -507,17 +507,21 @@ fn build_pose(
         // `base_mat` for it entirely:
         //
         //     let (rotation, translation) = model.root_rest
-        // The offset travels in `base_mat` only.
+        // Both channels carry the offset, because they feed different consumers
+        // and are not summed.
         //
-        // `DObj::build` gives a root bone TWO channels: `bind_world` from
-        // `base_mat[bone]`, and `bind_rotation`/`bind_translation` from
-        // `root_rest`. Setting both to the same offset displaces the root twice
-        // while every other bone is displaced once, so the rig and its geometry
-        // disagree by exactly the view offset -- the arms land 152 units out and
-        // the camera eye, which derives from `view_bone`, rides high. The owner
-        // confirmed the raised viewpoint appears only with this weapon, which is
-        // what pinned it to this path rather than to a general camera bug.
-        root_rest: None,
+        //   bind_world      <- base_mat[bone]        drives *skinning*, i.e. where
+        //                                            the geometry ends up
+        //   bind_translation<- root_rest (root only) drives the *posed world*, which
+        //                                            the FPV assembly reads for the
+        //                                            camera eye and part placement
+        //
+        // Dropping `root_rest` (855afa1 -> bd42e17) on the theory that the offset
+        // was being applied twice put `view_trans` back to 152.4 and the viewpoint
+        // high again, while `admitted` kept climbing. The two are not a double
+        // count; they are two different answers to two different questions.
+        root_rest: (root_offset != [0.0; 3])
+            .then(|| (bevy::math::Quat::IDENTITY, bevy::math::Vec3::from_array(root_offset))),
     })
 }
 
