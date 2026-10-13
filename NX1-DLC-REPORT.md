@@ -40,38 +40,49 @@ Percentages are honest: they reflect **verified working state**, not effort spen
 | **`.cast` material reader** | **100%** | Decoded `mesh.m`→`matl` id scheme; all 34 surfaces → 24 real `mc\mtl_*` materials with PNG maps | asserted against real files |
 | **Animation binding** | **100%** | 13 NX1 clips bind; IDLE→`viewmodel_scar_h_idle` on `szXAnims[IDLE]` | verified in log |
 | **Viewmodel rig** | **100%** | Gun held by NX1's own hands (`nx1_viewhands_us_army`), correct placement, gun+hands in draw plan (`bones=35 surfaces=5`) | verified in log + video |
+| **NX1 textures on gun** | **~95%** | NX1's own PNG maps now decode and upload; each surface binds its own cast material. Awaiting visual confirmation. | `nx1 images: 41 decoded`, `colour map not uploaded: 5 → 0` |
+| **NX1 hands rendering** | **~95%** | Drawn for the first time — they were dead in every earlier build. | `nx1_viewhands_us_army: admitted=2` (was 0) |
 | **Playable in game** | **~95%** | Gun renders, aims, fires (ammo decrements), reloads, swaps | video confirmed |
-| **NX1 textures on gun** | **~40%** | Reader resolves every surface's own PNG map; loader written and tested; **binding still borrows one retail material** — see below | `textured=34` then reverted |
-| **NX1 sounds** | **0%** | 9 WAVs staged, not wired; gun still plays donor audio | — |
-| **Generalise to all NX1 guns** | **~10%** | Reader is gun-agnostic; the SCAR2 wiring is scaffolding to be replaced by a general importer | — |
+| **NX1 sounds** | **~5%** | Scoped: 16 WAVs found (not 9). Needs a new loose-WAV audio source — the engine has none. | `NX1-SOUNDS.md` |
+| **Generalise to all guns** | **~10%** | Reader is gun-agnostic; the SCAR2 wiring is scaffolding to be replaced by a general importer | — |
 | **NX1 maps** | **0%** | not started | — |
 
-**One weapon, playable: ~70%** toward "an NX1 gun that looks and sounds native."
-**The reusable engine (reader/namespace/anim/material): ~90% done.**
+**One playable weapon: ~85%** toward "an NX1 gun that looks and sounds native."
+**The reusable engine (reader/namespace/anim/material/texture pipeline): ~95% done.**
 
 ---
 
-## The texture wall (the honest open problem)
+## The texture wall — SOLVED (`9826b2a`, `4892ad9`)
 
-The gun currently wears a **borrowed retail material**. Getting NX1's own PNG
-camo on it is the last big visual blocker, and it has a precise, reproducible
-failure:
+It was **one function**, and it was visible in the log of the build everyone thought was good.
 
-- Binding each surface to its **own NX1 material row** (cloned from a real donor,
-  carrying NX1's decoded pixels) makes **every surface admit** in the log — and
-  the **entire viewmodel vanishes**.
-- This reproduced **twice**, via two different mechanisms:
-  1. *Hand-installed GPU images* — a row with `decoded = Some` is skipped by the
-     demand planner (reads as already decoded), so it never uploads.
-  2. *BGRA payloads through the normal loader* (`format = 21`) — routed correctly,
-     decoded, still vanished.
-- The donor binding (all surfaces → one real retail material) **always works**.
+`material_images.rs` dispatched image decode over `[Iw4, T5, Iw5, T6]` only. NX1 image slots were
+filtered out before they reached the decoder — silently, with no `Missing` outcome — so they never
+uploaded. `admit_material` returned `colour map not uploaded`, `build_skin_layout` dropped those
+surfaces, and the rig dropped the model.
 
-**Conclusion so far:** a material row *minted in the walk* — even cloned from a
-real donor with real pixels — is not equivalent to a genuine retail row for the
-FPV draw. The missing piece is something about the row that isn't the texture
-(zone/route metadata, or how the render catalog indexes a row it didn't author).
-This is the next thing to read before touching the draw again.
+Both earlier texture attempts had produced *correct* BGRA payloads that were simply never read.
+And the known-good donor build was already reporting the bug — on the hands:
+
+```
+mc\mtl_nx_us_army_glove refused: colour map not uploaded
+```
+
+**The hands had been invisible the whole time.** The donor binding masked it on the gun, so the
+gun looked fine and nobody noticed the hands were gone.
+
+A second, smaller bug surfaced when verifying: the NX1 rows are registered under
+`fpv.map_namespace` (the *map's* namespace, `Iw4`), because they must live in the catalog that map
+renders from. The new decode pass initially asked for `AssetNamespace::Nx1` and decoded nothing
+(`nx1 images: 0`). The insert now returns the namespace it used and the decode targets that.
+
+Result:
+
+```
+nx1 images: 41 decoded from the export (namespace iw4)
+colour map not uploaded            : 5  ->  0
+nx1_viewhands_us_army: admitted=2  (was 0)
+```
 
 ---
 
