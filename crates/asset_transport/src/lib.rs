@@ -29,7 +29,9 @@ pub use iwd::{
     game_mains_under, inflate_zlib, iwd_entry_reads, iwd_read_cost, read_iwd_named, read_text,
 };
 pub use load_jobs::{CacheResult, Job, JobKind};
-pub use namespace_trees::{NamespaceSoundIwd, NamespaceTree, NamespaceTrees};
+pub use namespace_trees::{
+    NamespaceSoundIwd, NamespaceTree, NamespaceTrees, NX1_SOUNDS_ROOT,
+};
 pub use progress::{
     LoadLaneTiming, LoadProgress, LoadSnapshot, StageEnd, StageHandle, StageId, StageKey,
     StageOutcome, StageScope, StageSnapshot, WorkCount, peak_resident_bytes,

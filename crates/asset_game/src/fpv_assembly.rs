@@ -157,11 +157,33 @@ fn hide_words(
         return None;
     }
     let mut words = [0u32; 6];
+    // Why an NX1 surface is culled. The words are built from the mesh's own bone
+    // names, so they are rig-correct, but the *tags* come from the weapon row — and
+    // the NX1 row's are the donor SCAR's. NX1's own rig carries 24 `tag_` bones, so
+    // donor tags can and do match them, and `bone_has_hidden_ancestor` takes whole
+    // subtrees with them. That is how 29 of the gun's 34 surfaces disappear.
+    //
+    // Report the tags and exactly which bones they hit, so the set to correct is
+    // named rather than guessed.
+    let explain = skel.name.starts_with("nx1_") && !hide_tags.is_empty();
+    let mut matched: Vec<&str> = Vec::new();
     for bone in 0..skel.bone_names.len() {
         if crate::bone_has_hidden_ancestor(&skel.bone_names, |b| skel.parent_of(b), bone, hide_tags)
         {
             set_hide_part_bit(&mut words, bone);
+            if explain {
+                matched.push(&skel.bone_names[bone]);
+            }
         }
+    }
+    if explain {
+        diag::info!(
+            Fpv,
+            "fpv nx1 hide: mesh={} tags={hide_tags:?} hides {} of {} bones: {matched:?}",
+            skel.name,
+            matched.len(),
+            skel.bone_names.len()
+        );
     }
     Some(words)
 }

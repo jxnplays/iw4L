@@ -132,9 +132,33 @@ pub struct NamespaceSoundIwd {
     iw4: Option<crate::iwd::IwdSoundIndex>,
     t5: Option<crate::iwd::IwdSoundIndex>,
     iw5: Option<crate::iwd::IwdSoundIndex>,
+    /// Where NX1's loose sound files live.
+    ///
+    /// NX1 is not a zone game: it has no fastfile, so no `IwdSoundIndex` can be
+    /// opened for it and `index(Nx1)` is `None` by construction. Its sounds ship as
+    /// plain files in the export's `sounds` tree, which the streamed-clip path
+    /// already knows how to decode -- it only ever asked an archive. So NX1 is
+    /// served from a directory instead, and `read_sound` is the single seam.
+    nx1_root: Option<std::path::PathBuf>,
 }
 
+/// NX1 sound files, as they sit in the Saluki export.
+pub const NX1_SOUNDS_ROOT: &str =
+    "E:\\Call of Duty Future Warfare\\NX1\\output\\one-gun\\tools\\saluki\\exported_files\\nx1\\sounds";
+
 impl NamespaceSoundIwd {
+    /// Point NX1 at a directory of loose sound files.
+    pub fn with_nx1_root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        let root = root.into();
+        if root.is_dir() {
+            self.nx1_root = Some(root);
+        }
+        self
+    }
+
+    pub fn nx1_root(&self) -> Option<&std::path::Path> {
+        self.nx1_root.as_deref()
+    }
     pub fn open(trees: &NamespaceTrees) -> (Self, Vec<String>) {
         let mut opened = Self::default();
         let mut lines = Vec::new();
@@ -183,11 +207,48 @@ impl NamespaceSoundIwd {
         ns: AssetNamespace,
         relative: &str,
     ) -> Option<Result<Vec<u8>, String>> {
+        if ns == AssetNamespace::Nx1 {
+            return self.read_nx1_file(relative);
+        }
         self.index(ns)?.read_sound(relative)
     }
 
+    /// Read one NX1 sound from the export directory.
+    ///
+    /// The relative path comes from a catalog row, but a catalog row should never
+    /// be able to name a file outside the tree, so `..` and rooted paths are refused
+    /// rather than normalised.
+    fn read_nx1_file(&self, relative: &str) -> Option<Result<Vec<u8>, String>> {
+        let root = self.nx1_root.as_deref()?;
+        let trimmed = relative.trim_start_matches(['/', '\\']);
+        if trimmed.is_empty() {
+            return None;
+        }
+        let mut parts: Vec<&str> = Vec::new();
+        for part in trimmed.split(['/', '\\']) {
+            match part {
+                "" | "." => continue,
+                ".." => return None,
+                other => {
+                    if other.contains(':') {
+                        return None;
+                    }
+                    parts.push(other);
+                }
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        let mut path = root.to_path_buf();
+        for part in parts {
+            path.push(part);
+        }
+        Some(std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display())))
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.iw4.is_none() && self.t5.is_none() && self.iw5.is_none()
+        self.iw4.is_none() && self.t5.is_none() && self.iw5.is_none() && self.nx1_root.is_none()
     }
 
     fn slot_mut(&mut self, ns: AssetNamespace) -> Option<&mut Option<crate::iwd::IwdSoundIndex>> {
