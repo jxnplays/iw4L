@@ -1051,6 +1051,44 @@ pub(super) async fn walk_prepared_match(
             )),
             Err(error) => report.push(format!("nx1 images: {error}")),
         }
+        // Diagnostic: the NX1 gun and hands admit and then draw nothing, while the
+        // donor material on the same geometry draws. The material rows are clones
+        // of the donor, so the image rows are the only variables. Dump one NX1
+        // image and one retail image field by field so the difference is measured.
+        let dump = |tag: &str, i: &asset_material::AuthoredImage| {
+            format!(
+                "{tag}: name={} ns={} map_type={} semantic={} srgb={} {}x{} depth={} levels={} format={} payload={} decoded={}",
+                i.name.as_str(),
+                i.namespace.as_str(),
+                i.map_type,
+                i.semantic,
+                i.use_srgb_reads,
+                i.width,
+                i.height,
+                i.depth,
+                i.level_count,
+                i.format,
+                i.payload.len(),
+                i.decoded.is_some(),
+            )
+        };
+        let nx1_one = global
+            .images
+            .iter()
+            .find(|i| i.namespace == namespace && i.format == 21);
+        let retail_one = global
+            .images
+            .iter()
+            .find(|i| i.namespace == namespace && i.format != 21 && !i.payload.is_empty());
+        if let (Some(a), Some(b)) = (nx1_one, retail_one) {
+            report.push(format!("nx1 imgcmp {} | {}", dump("NX1", a), dump("RETAIL", b)));
+        } else {
+            report.push(format!(
+                "nx1 imgcmp unavailable: nx1={} retail={}",
+                nx1_one.is_some(),
+                retail_one.is_some()
+            ));
+        }
     }
     // Stamp the NX1 meshes' material edges now that they are in the catalog.
     //

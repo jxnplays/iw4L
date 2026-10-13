@@ -204,6 +204,47 @@ pub(super) fn admit_material(
         sort_key: authored.sort_key,
         material_sorted_index: Some(ordinal.get()),
     };
+    // Diagnostic: an NX1 surface admits and then draws nothing, while the donor
+    // material on the same geometry draws. The rows are otherwise identical
+    // clones, so the only variables are the image bindings. Log the first NX1
+    // material admitted and the first retail one side by side, once each, so the
+    // difference is measured rather than inferred.
+    if present_name.contains("mtl_nx") {
+        static NX1_REPORTED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !NX1_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let dump = |tag: &str, a: &render_material::RuntimeMaterial| {
+                let bind = |sem: u8| {
+                    a.textures.iter().find_map(|(_, texture)| {
+                        texture
+                            .filter(|b| b.semantic == sem)
+                            .map(|b| b.image.0)
+                    })
+                };
+                diag::info!(
+                    Fpv,
+                    "fpv nx1 matcmp {tag}: name={} ns={} techset={} sort_key={} cull={:?} consts={} col={:?} spec={:?} normal={:?} envmap={:?}",
+                    a.name.as_str(),
+                    a.namespace.as_str(),
+                    a.technique_set.as_str(),
+                    a.sort_key,
+                    cull_mode,
+                    a.constants.len(),
+                    bind(TS_COLOR_MAP),
+                    bind(asset_material::TS_SPECULAR_MAP),
+                    bind(asset_material::TS_NORMAL_MAP),
+                    env_map_parms,
+                );
+            };
+            dump("NX1", authored);
+            // One retail material admitted for comparison: first row that is not NX1.
+            if let Some((&retail_i, _)) = admission.by_authored.iter().next() {
+                if let Some(retail) = global.parts().materials.get(retail_i) {
+                    dump("RETAIL", retail);
+                }
+            }
+        }
+    }
     let row = admission.materials.len() as u32;
     admission.materials.push(material);
     admission.by_authored.insert(mat_i, row);
