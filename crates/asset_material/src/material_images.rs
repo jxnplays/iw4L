@@ -181,6 +181,72 @@ pub fn decode_images_for_keys(
     Ok(n)
 }
 
+/// Decode every pending image a namespace's materials reference.
+///
+/// The keyed pass above runs during the match walk, *before* the NX1 cast meshes
+/// are inserted and before their materials exist — so an NX1 material installed
+/// later would sit in the catalog with an empty payload and no decoded body, and
+/// the FPV draw would answer `colour map not uploaded` and drop the surface.
+/// This runs immediately after the NX1 insert instead.
+///
+/// Reuses `requested_color_map_slots`, so an NX1 map is selected under exactly
+/// the same rules as a retail one (semantic, alpha test, linear).
+/// Every namespace whose images the loader decodes.
+///
+/// A namespace missing from this list has its image slots dropped before they
+/// reach the decoder — silently, with no `Missing` outcome — so they never upload
+/// and the FPV draw answers `colour map not uploaded` by dropping the surface and
+/// then the whole viewmodel. NX1 belongs here: it is not a zone game, so it has no
+/// fastfile tree (`trees.main_for(Nx1)` is `None`), but its maps ship as in-memory
+/// payloads that `prepare_unshared` decodes without ever consulting an index.
+pub const IMAGE_DECODE_NAMESPACES: [crate::AssetNamespace; 5] = [
+    crate::AssetNamespace::Iw4,
+    crate::AssetNamespace::T5,
+    crate::AssetNamespace::Iw5,
+    crate::AssetNamespace::T6,
+    crate::AssetNamespace::Nx1,
+];
+
+pub fn decode_images_for_namespace(
+    trees: &asset_transport::NamespaceTrees,
+    catalog: &mut MaterialDefinitions,
+    namespace: crate::AssetNamespace,
+    stage: &StageHandle,
+    pool: &TaskPool,
+) -> Result<usize, String> {
+    let work: Vec<ImageRequest> = requested_color_map_slots(catalog)
+        .into_iter()
+        .filter(|(slot, _)| {
+            catalog
+                .images
+                .get(*slot)
+                .is_some_and(|image| image.namespace == namespace)
+        })
+        .collect();
+    if work.is_empty() {
+        return Ok(0);
+    }
+    let (decoded, _) = decode_requests_from_trees(&catalog.images, trees, &work, stage, pool)?;
+    let mut n = 0usize;
+    for outcome in decoded {
+        if let ImageOutcome::Decoded {
+            image_index,
+            payload,
+            wrap,
+            variant,
+            ..
+        } = outcome
+        {
+            let slot = &mut catalog.images[image_index];
+            slot.decoded = Some(wrap_payload(&payload, wrap));
+            slot.decoded_variant = variant;
+            slot.common_owned = false;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 fn requested_keyed_image_slots(
     catalog: &MaterialDefinitions,
     keys: impl IntoIterator<Item = crate::MaterialKey>,
@@ -373,12 +439,11 @@ fn decode_requests_from_trees(
             stage.advance(1);
         }
     }
-    for namespace in [
-        crate::AssetNamespace::Iw4,
-        crate::AssetNamespace::T5,
-        crate::AssetNamespace::Iw5,
-        crate::AssetNamespace::T6,
-    ] {
+    // Every namespace an image slot can carry. A namespace missing from this list
+    // has its images dropped here without even a `Missing` outcome, so they never
+    // reach `decode_one_request` and never upload -- which the FPV draw reads as
+    // "colour map not uploaded" and answers by dropping the whole viewmodel.
+    for namespace in IMAGE_DECODE_NAMESPACES {
         let requests: Vec<_> = work
             .iter()
             .copied()

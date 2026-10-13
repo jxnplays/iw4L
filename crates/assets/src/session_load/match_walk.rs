@@ -304,26 +304,57 @@ fn insert_nx1_cast_meshes(
         // the gun on screen with a borrowed texture; wiring NX1's own PNG maps
         // through the image trees replaces the texture while keeping each
         // surface's own cast material.
-        // Bind every surface to a real, admitting donor material.
+        // Bind each surface to its OWN NX1 cast material, carrying NX1's own decoded
+        // PNG maps.
         //
-        // This is the proven-good binding (renders, fires, reloads). Binding the
-        // NX1-material rows directly — whether the maps were hand-installed as GPU
-        // images or carried as BGRA payloads — made every surface admit and yet the
-        // whole viewmodel vanish. A material row minted in this walk, even cloned
-        // from a real donor and given real pixels, is not equivalent to a retail
-        // row for the FPV draw, and the two texture attempts each regressed the
-        // gun. The donor keeps it on screen. Each surface still records its own
-        // cast material and PNG map (the reader resolves them; tests assert it);
-        // binding NX1's own maps is the next task, to be verified offline before
-        // it is allowed to touch the draw.
+        // Each NX1 material is a clone of a real, admitting retail material (so
+        // the techset is compiled and the row earns a sorted ordinal) with its
+        // colour/normal/specular bindings repointed at NX1's maps. The maps ride
+        // the pipeline as BGRA payloads (format 21), which `prepare_unshared`
+        // decodes and uploads like any retail colour map.
+        //
+        // The two earlier attempts at this failed for one reason, now fixed:
+        // `decode_requests_from_trees` dispatched only `[Iw4, T5, Iw5, T6]`, so
+        // NX1 image slots were filtered out before they reached the decoder and
+        // never uploaded. That is why "colour map not uploaded" appeared — in the
+        // donor build too, on the hands — and why a correctly-filled payload still
+        // read as no texture. The donor binding was masking it on the gun.
+        //
+        // A surface whose PNGs cannot be decoded falls back to the donor, so a
+        // missing map degrades one surface rather than the whole viewmodel.
         let donor_index = donor.map(|(authored, _)| *authored);
+        let mut textured = 0usize;
         let named = mats.iter().flatten().count();
-        skel.surface_materials = vec![
-            donor_index.map(asset_core::WalkLocalMaterialIndex::from_walk);
-            skel.surface_index_ranges.len()
-        ];
+        skel.surface_materials = mats
+            .iter()
+            .map(|mat| {
+                let Some(mat) = mat else { return None };
+                let textures = Nx1MaterialTextures {
+                    specular: mat.textures.specular.clone(),
+                    normal: mat.textures.normal.clone(),
+                    albedo: mat.textures.albedo.clone(),
+                    detail: mat.textures.detail.clone(),
+                };
+                let authored = donor_index.and_then(|donor| {
+                    nx1_textures::register_nx1_textured_material(
+                        defs,
+                        ns,
+                        &mat.name,
+                        &textures,
+                        donor,
+                        std::path::Path::new(NX1_IMAGES_ROOT),
+                    )
+                });
+                if authored.is_some() {
+                    textured += 1;
+                }
+                Some(asset_core::WalkLocalMaterialIndex::from_walk(
+                    authored.or(donor_index)?,
+                ))
+            })
+            .collect();
         report.push(format!(
-            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} cast_materials={named} donor={donor_index:?}",
+            "nx1 cast insert: {label} ok name={name} bones={} surfaces={} cast_materials={named} textured={textured} donor={donor_index:?}",
             skel.bones.len(),
             skel.surface_index_ranges.len()
         ));
@@ -989,6 +1020,29 @@ pub(super) async fn walk_prepared_match(
     );
     // Bind rigs and tracks to the finished mesh publication, after material linking.
     insert_nx1_cast_meshes(&mut fpv_meshes, &mut world_weapons, &mut global, &mut report);
+    // Decode the NX1 maps now that the NX1 materials that reference them exist.
+    //
+    // The colour-map decode pass earlier in this walk ran before this insert, so
+    // it saw no NX1 material and no NX1 image. Their PNG payloads would then sit
+    // in the catalog forever undecoded, and the FPV draw reads that as `colour map
+    // not uploaded` and drops the surface — the whole viewmodel, hands included.
+    // Ordering matters twice over: the images must exist (this insert) before the
+    // decode can select them, and be decoded before the render catalog is built.
+    {
+        let stage = progress.begin_scoped(StageId::Images, "nx1", None);
+        let decoded = asset_material::material_images::decode_images_for_namespace(
+            &image_trees,
+            &mut global,
+            asset_core::AssetNamespace::Nx1,
+            &stage,
+            load_pool(),
+        );
+        stage.finish_from(&decoded);
+        match decoded {
+            Ok(n) => report.push(format!("nx1 images: {n} decoded from the export")),
+            Err(error) => report.push(format!("nx1 images: {error}")),
+        }
+    }
     // Stamp the NX1 meshes' material edges now that they are in the catalog.
     //
     // `link_materials_after_absorb` (above) already ran `resolve_materials` over
