@@ -1554,6 +1554,31 @@ impl Default for WeaponRow {
 /// class names it.
 pub const NX1_SCAR2_BASE: &str = "scar2";
 
+/// Attachment tags the NX1 SCAR Mod 2 hides, named against NX1's own rig.
+///
+/// The donor IW4 `scar` row carries ten attachment tags because it is a bare rifle.
+/// NX1's mesh has a bone for every one of them, so the donor's list hid 28 of its 35
+/// bones — the gun drew 5 of 34 surfaces and read as missing geometry.
+///
+/// These hide the four duplicate optics, the shotgun, the silencer and the optics'
+/// own reticles and screens, and keep the red dot, the M203 and the foregrip, which
+/// together make a believable SCAR Mod 2.
+pub const NX1_SCAR2_HIDE_TAGS: [&str; 13] = [
+    "tag_acog_2",
+    "tag_eotech",
+    "tag_heartbeat",
+    "tag_thermal_scope",
+    "tag_motion_tracker",
+    "tag_sight_off",
+    "tag_shotgun",
+    "tag_silencer",
+    "tag_reticle_acog",
+    "tag_reticle_red_dot",
+    "tag_eotech_reticle",
+    "tag_reticle_thermal_scope",
+    "tag_flash_silenced",
+];
+
 /// NX1's own clips for the SCAR Mod 2, by weapon anim slot.
 ///
 /// Names are the NX1 `.cast` clip names, which are the same `viewmodel_scar_h_*`
@@ -1706,6 +1731,25 @@ impl WeaponRegistry {
         // top-level game folder beside Iw4/Iw5/T5/T6 rather than a class inside
         // Iw4: `categories_for` keys its folders by namespace first.
         row.namespace = NX1;
+        // NX1 gets its own hide tags, not the donor's.
+        //
+        // `hide_words` matches the weapon row's tags against the *mesh's* bone
+        // names, so it is rig-correct -- but the tags themselves describe the
+        // donor's attachment configuration. The IW4 `scar` row is a bare rifle with
+        // no attachments, so its tags are ten attachment names, and NX1's rig has a
+        // bone for every one of them (five optics, M203, shotgun, silencer,
+        // foregrip). The donor's list therefore hid 28 of NX1's 35 bones and 29 of
+        // the gun's 34 surfaces, which reads on screen as missing geometry.
+        //
+        // NX1's mesh is a single baked model with its attachments modelled in, so
+        // what it needs is "hide the attachments this configuration does not
+        // carry". Keep the red dot, the M203 and the foregrip; hide the four
+        // duplicate optics, the shotgun, the silencer, and the optics' own
+        // reticles and screens.
+        row.hide_tags = NX1_SCAR2_HIDE_TAGS
+            .iter()
+            .map(|tag| (*tag).to_owned())
+            .collect();
         // The class picker labels from this key. A literal rather than a
         // localized token, because NX1 has no string table in this tree.
         row.display_name_key = Some("SCAR Mod 2".to_owned());

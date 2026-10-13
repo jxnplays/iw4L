@@ -278,7 +278,7 @@ impl Node<'_> {
 
     /// The value of a single 64-bit integer property, if it is one.
     ///
-    /// The meshâ†’material link and the material's own texture ids are both
+    /// The meshÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢material link and the material's own texture ids are both
     /// `l` (int64) scalars, and both are optional: a mesh without a material
     /// has no `m`, and a material with no textures names none of them.
     fn int64(&self, name: &str) -> Option<u64> {
@@ -368,8 +368,8 @@ struct Surface {
 /// A cast bone carries its local transform, so the pose is the file's own
 /// hierarchy rather than a reconstruction.
 ///
-/// `DObj` reads three of these arrays by *child* index â€” `bone - num_root_bones`
-/// â€” and `base_mat` by bone index. Bones are therefore emitted roots first, and
+/// `DObj` reads three of these arrays by *child* index ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â `bone - num_root_bones`
+/// ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â and `base_mat` by bone index. Bones are therefore emitted roots first, and
 /// `parent_list`, `quats` and `trans` carry one entry per non-root bone.
 ///
 /// `parent_list` is a step, not an absolute index: `DObj` recovers the parent as
@@ -386,6 +386,7 @@ fn build_pose(
     bone_names: &[String],
     bone_parents: &[i32],
     bones: &[BoneBind],
+    root_offset: [f32; 3],
 ) -> Option<ModelPoseSrc> {
     if bone_names.len() != bones.len() || bones.is_empty() {
         return None;
@@ -452,7 +453,7 @@ fn build_pose(
         trans.push(bones[*index].trans);
     }
 
-    let base_mat = order
+    let base_mat: Vec<(bevy::math::Quat, bevy::math::Vec3)> = order
         .iter()
         .map(|index| {
             let bind = &bones[*index];
@@ -463,7 +464,29 @@ fn build_pose(
         })
         .collect();
     let ordered_names: Vec<String> = order.iter().map(|index| bone_names[*index].clone()).collect();
-    Some(ModelPoseSrc {
+    // The offset has to be applied to every `base_mat` entry.
+        //
+        // `base_mat` holds a *world* transform per bone — `DObj::build` does
+        // `Mat4::from_rotation_translation(bq, bt)` and uses it as `bind_world`
+        // directly, with no parent accumulation. `root_rest` is a different thing:
+        // it feeds `bind_rotation`/`bind_translation` and is ignored for
+        // `bind_world`, so setting it moved nothing the view reads. An earlier
+        // version shifted only `base_mat[0]`, which is equally wrong: every other
+        // bone carries its own absolute world translation and would keep the
+        // original offset.
+        //
+        // `trans` holds *parent-relative* offsets and is deliberately left alone,
+        // so the hierarchy's shape is unchanged and only the rig's placement moves.
+        let base_mat: Vec<(bevy::math::Quat, bevy::math::Vec3)> = base_mat
+            .into_iter()
+            .map(|(q, mut t)| {
+                if root_offset != [0.0; 3] {
+                    t += bevy::math::Vec3::from_array(root_offset);
+                }
+                (q, t)
+            })
+            .collect();
+        Some(ModelPoseSrc {
         name: name.to_owned(),
         num_bones: bones.len(),
         num_root_bones,
@@ -478,7 +501,21 @@ fn build_pose(
         quats,
         trans,
         base_mat,
-        root_rest: None,
+        // The view offset belongs here, not in `base_mat`.
+        //
+        // `DObj::build` takes a root bone's bind from `root_rest` and ignores
+        // `base_mat` for it entirely:
+        //
+        //     let (rotation, translation) = model.root_rest
+        //         .filter(|_| bone == 0).unwrap_or((Quat::IDENTITY, Vec3::ZERO));
+        //
+        // So shifting `base_mat[0]` moved nothing the assembly could see: the root
+        // stayed at identity and `tag_view` still composed to +152.4. That is why
+        // the reader's own test passed while the viewmodel stayed 152 units from
+        // the camera, and why the camera eye ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which derives from `view_bone` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
+        // was raised.
+        root_rest: (root_offset != [0.0; 3])
+            .then(|| (bevy::math::Quat::IDENTITY, bevy::math::Vec3::from_array(root_offset))),
     })
 }
 
@@ -529,7 +566,7 @@ fn pack_iw4_vertex(
 ///
 /// The second value is one entry per surface, in surface order: the CryEngine
 /// material path the surface draws with (`mc\mtl_weapon_scar_h` and the rest).
-/// These are names, not catalog rows â€” this reader holds no catalog, so the
+/// These are names, not catalog rows ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â this reader holds no catalog, so the
 /// caller registers them and writes the resulting indices onto
 /// `skel.surface_materials` itself.
 pub fn read_cast_xmodel_materials(
@@ -547,7 +584,7 @@ pub fn read_cast_xmodel_materials(
     // Materials first, in their own pass over the same container.
     //
     // A `mesh` node names its material by id (`m`, an int64), and a `matl` node
-    // does not state its own id â€” the id sits one below the lowest of the
+    // does not state its own id ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the id sits one below the lowest of the
     // texture ids the material owns (`specular`/`normal`/`albedo`/`extra0`,
     // each also an int64). Those ids come from one monotonic counter shared by
     // materials and their textures, so a material's own id is recoverable from
@@ -783,27 +820,14 @@ pub fn read_cast_xmodel_materials(
         return Err("cast: no mesh node carried geometry".to_owned());
     }
     // Recentre *before* the pose is built.
+    // Recentre *before* the pose is built.
     //
-    // `DObj::build` takes its bind transforms from `ModelPoseSrc::base_mat`, and
-    // `base_mat`, `trans` and `quats` are all derived from this `bones` array.
-    // Recentring the assembled `skel` afterwards moved `skel.bones` and left the
-    // pose holding the file's original values, so the FPV assembly â€” which reads
-    // bind transforms only through `base_mat` â€” never saw the shift. That is why
-    // the hands stayed 152 units from the camera with the shift "applied" and the
-    // reader's own test passing.
+    // `DObj::build` reads its bind transforms from `ModelPoseSrc`, and `base_mat`,
+    // `trans` and `quats` are all built from this `bones` array -- but a root bone's
+    // bind comes from `root_rest`, not `base_mat`, so the offset travels there. See
+    // the note where `root_rest` is set.
     let view_offset = tag_view_offset(&bone_names, &bone_parents, &bones);
-    if view_offset != [0.0; 3] {
-        // The root of the view bone's chain: everything hangs off it, so shifting
-        // it shifts the rig without disturbing any parent-relative relationship.
-        if let Some(root) = chain_root(&bone_parents, view_bone_index(&bone_names)) {
-            bones[root].trans = [
-                bones[root].trans[0] + view_offset[0],
-                bones[root].trans[1] + view_offset[1],
-                bones[root].trans[2] + view_offset[2],
-            ];
-        }
-    }
-    let pose = build_pose(name, &bone_names, &bone_parents, &bones);
+    let pose = build_pose(name, &bone_names, &bone_parents, &bones, view_offset);
 
     let rigid_verts = vert_skin
         .iter()
@@ -849,7 +873,7 @@ pub fn read_cast_xmodel_materials(
     // touches this bone" marker; the renderer hides a surface when its part bits
     // intersect the weapon's hide bits (the attachment-hide tags). A blanket
     // "every part" mask therefore hides the *entire* mesh the moment the weapon
-    // hides any attachment at all â€” which is exactly what happened to the NX1
+    // hides any attachment at all ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â which is exactly what happened to the NX1
     // gun: the donor SCAR row hides its sight attachments, so the hide word is
     // non-zero and all 34 surfaces AND-ed against it and were dropped. Marking
     // only the bones a surface really uses keeps attachment hiding local to the
@@ -938,23 +962,6 @@ pub fn read_cast_xmodel_materials(
     Ok((skel, surface_material_names))
 }
 
-/// Index of the rig's view point, if it has one.
-fn view_bone_index(bone_names: &[String]) -> Option<usize> {
-    bone_names.iter().position(|name| name == "tag_view")
-}
-
-/// The bone every other bone in this chain ultimately hangs off.
-fn chain_root(parents: &[i32], from: Option<usize>) -> Option<usize> {
-    let mut node = from?;
-    for _ in 0..parents.len() {
-        match parents.get(node).copied().unwrap_or(-1) {
-            p if p < 0 => return Some(node),
-            p => node = p as usize,
-        }
-    }
-    Some(node)
-}
-
 /// Bind-world position of `tag_view`, so it can be moved onto the origin.
 ///
 /// Each NX1 viewmodel is authored around *its own* `tag_view`: the hands carry
@@ -965,17 +972,8 @@ fn chain_root(parents: &[i32], from: Option<usize>) -> Option<usize> {
 /// part against it, so two meshes authored against different view origins cannot
 /// both be right. Whichever origin wins, the other part ends up hundreds of units
 /// from the camera: admitted, textured, in the draw plan, and invisible.
-///
-/// The shift goes on the root bone's bind translation rather than the vertices.
-/// Skinning is `bone_matrix * vertex`, so moving the root moves every bone's world
-/// transform and therefore the whole skinned result, keeping geometry and rig in
-/// agreement. Moving the vertices instead would desynchronise the two.
-///
-/// Must run *before* `build_pose`: `DObj::build` takes its bind transforms from
-/// `ModelPoseSrc::base_mat`, and `base_mat`, `trans` and `quats` are all derived
-/// from the same `bones` array.
 fn tag_view_offset(bone_names: &[String], parents: &[i32], bones: &[BoneBind]) -> [f32; 3] {
-    let Some(view) = view_bone_index(bone_names) else {
+    let Some(view) = bone_names.iter().position(|name| name == "tag_view") else {
         return [0.0; 3];
     };
     let mut world = [0.0f32; 3];
@@ -986,7 +984,7 @@ fn tag_view_offset(bone_names: &[String], parents: &[i32], bones: &[BoneBind]) -
         };
         for axis in 0..3 {
             world[axis] += trans[axis];
-        }
+        };
         match parents.get(node).copied().unwrap_or(-1) {
             p if p < 0 => break,
             p => node = p as usize,
@@ -994,6 +992,7 @@ fn tag_view_offset(bone_names: &[String], parents: &[i32], bones: &[BoneBind]) -
     }
     [-world[0], -world[1], -world[2]]
 }
+
 /// Read an NX1 `.cast` mesh, discarding the per-surface material names.
 pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
     read_cast_xmodel_materials(bytes, name).map(|(skel, _)| skel)
