@@ -144,14 +144,35 @@ impl FpvPreparationJob {
                     }
                     for part in assembly.parts() {
                         let order = part.model.order();
-                        if fpv.get_at(order).is_none() {
+                        let Some(entry) = fpv.get_at(order) else {
                             continue;
-                        }
+                        };
                         if seen_models.insert(order) {
                             models.push(order);
                         }
-                        if seen_layouts.insert((order, part.hide)) {
-                            layouts_queue.push((order, part.hide));
+                        // An NX1 mesh carries its own geometry: its attachments are
+                        // modelled into it, not toggled by the weapon row. The row is
+                        // the donor SCAR's, so its hide words describe the donor's
+                        // attachment set and cull 29 of the NX1 gun's 34 surfaces --
+                        // which reads on screen as missing geometry and flat panels,
+                        // not as missing textures. The NX1 hands already pass None and
+                        // admit every surface; the gun now does the same.
+                        let hide = if entry.skel.name.starts_with("nx1_") {
+                            None
+                        } else {
+                            part.hide
+                        };
+                        if entry.skel.name.starts_with("nx1_") {
+                            diag::info!(
+                                Fpv,
+                                "fpv nx1 part: role={:?} mesh={} hide={:?} -> None",
+                                part.role,
+                                entry.skel.name,
+                                part.hide
+                            );
+                        }
+                        if seen_layouts.insert((order, hide)) {
+                            layouts_queue.push((order, hide));
                         }
                     }
                 }

@@ -1121,10 +1121,11 @@ fn skin_fpv_geometry(
                         .and_then(|weapons| weapons.registry().gun_xmodel_of(equipped))
                         .unwrap_or("<none>");
                     let surfaces = fpv_plan.gun_plan_n.unwrap_or(0) as usize;
+                    let hands_surfaces = fpv_plan.hands_plan_n.unwrap_or(0) as usize;
                     let bones = rig.gun_mesh_shape().map(|(bones, _)| bones).unwrap_or(0);
                     diag::info!(
                         Fpv,
-                        "fpv table: weapon={equipped} gun_xmodel={gun_name} row_gun_xmodel={named} skin={} bones={bones} surfaces={surfaces}",
+                        "fpv table: weapon={equipped} gun_xmodel={gun_name} row_gun_xmodel={named} skin={} bones={bones} surfaces={surfaces} hands_surfaces={hands_surfaces}",
                         rig.gun_mesh_name().unwrap_or("<unread>"),
                     );
                 }
