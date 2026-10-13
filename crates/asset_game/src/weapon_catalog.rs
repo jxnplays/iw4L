@@ -1554,29 +1554,43 @@ impl Default for WeaponRow {
 /// class names it.
 pub const NX1_SCAR2_BASE: &str = "scar2";
 
-/// Attachment tags the NX1 SCAR Mod 2 hides, named against NX1's own rig.
+/// Attachment tags the NX1 SCAR Mod 2 hides, derived from the mesh.
 ///
-/// The donor IW4 `scar` row carries ten attachment tags because it is a bare rifle.
-/// NX1's mesh has a bone for every one of them, so the donor's list hid 28 of its 35
-/// bones — the gun drew 5 of 34 surfaces and read as missing geometry.
+/// `hide_words` matches these against the *mesh's* bone names, so it is
+/// rig-correct; the donor IW4 `scar` row's list was not, because it describes a bare
+/// rifle and NX1's mesh has a bone for every attachment it lists -- ten tags culled
+/// 28 of 35 bones, including the receiver's own.
 ///
-/// These hide the four duplicate optics, the shotgun, the silencer and the optics'
-/// own reticles and screens, and keep the red dot, the M203 and the foregrip, which
-/// together make a believable SCAR Mod 2.
-pub const NX1_SCAR2_HIDE_TAGS: [&str; 13] = [
+/// The set below was read off `surface_part_bits`: each surface's bone is recorded
+/// there, and the materials line up with them (`weapon_scar_h` -> `j_gun`,
+/// `red_dot_sight_tan` -> `tag_red_dot`, `suppressor_b` -> `tag_silencer`). The keep
+/// set is the base gun plus a red dot, the M203 and the foregrip; everything else is
+/// an attachment this configuration does not carry.
+///
+/// Note what is *not* here: `tag_red_dot` and `tag_reticle_red_dot`. An earlier
+/// version hid the red dot's own reticle, which is why the visible optic body went
+/// missing while a two-triangle variant survived.
+pub const NX1_SCAR2_HIDE_TAGS: [&str; 16] = [
+    // The "sight off" rail is the counterpart of the raised sight, not an
+    // attachment: showing both puts a collapsed and a raised optic on one gun.
+    "tag_sight_off",
+    // Attachments this configuration does not carry. Every one is a bone the mesh
+    // really has, which is exactly why the donor row's list culled base geometry.
+    "tag_silencer",
+    "tag_shotgun",
+    "j_pump_shotgun",
+    "j_reload_shotgun",
+    "j_plate_shotgun",
+    "j_ammo_shotgun",
+    "tag_thermal_scope",
+    "tag_reticle_thermal_scope",
     "tag_acog_2",
+    "tag_reticle_acog",
     "tag_eotech",
     "tag_heartbeat",
-    "tag_thermal_scope",
     "tag_motion_tracker",
-    "tag_sight_off",
-    "tag_shotgun",
-    "tag_silencer",
-    "tag_reticle_acog",
-    "tag_reticle_red_dot",
-    "tag_eotech_reticle",
-    "tag_reticle_thermal_scope",
     "tag_flash_silenced",
+    "tag_brass",
 ];
 
 /// NX1's own clips for the SCAR Mod 2, by weapon anim slot.
@@ -2802,3 +2816,4 @@ pub struct FpvAssemblyCensus {
     pub refused: usize,
     pub clip_tables: usize,
 }
+

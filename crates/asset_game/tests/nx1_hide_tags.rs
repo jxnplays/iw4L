@@ -151,6 +151,10 @@ fn nx1_keeps_the_gun_and_hides_only_unwanted_attachments() {
         "tag_silencer",
         "tag_flash_silenced",
         "tag_reticle_red_dot",
+        // Brass is hidden by ancestry rather than by a tag in the set: its parent
+        // sits under an attachment we exclude. Shell ejection is cosmetic and
+        // depends on the eject port being present, not on this bone animating.
+        "tag_brass",
     ];
     let unexpected: Vec<&String> = hidden
         .iter()
@@ -206,3 +210,6 @@ fn every_tag_exists_on_this_rig() {
         .collect();
     assert!(dead.is_empty(), "hide tags that match no NX1 bone: {dead:?}");
 }
+
+
+
