@@ -358,6 +358,45 @@ fn insert_nx1_cast_meshes(
             skel.bones.len(),
             skel.surface_index_ranges.len()
         ));
+        // Bounds of the packed positions, in the units the FPV draw uses. A viewmodel
+        // is authored in view space: its geometry must sit in front of the camera and
+        // near it. A mesh authored around the origin, or one whose extent is metres
+        // rather than centimetres, cannot be in front of anything — and the draw plan
+        // reports surfaces and bones without saying where any of it ended up.
+        //
+        // The hands admit every surface and are in the plan, yet nothing appears, and
+        // there is no hand clip in the dump to pose them with. This reports whether
+        // the geometry is even in the right place, without needing a weapon equipped.
+        {
+            let positions = &skel.positions;
+            let mut lo = [f32::INFINITY; 3];
+            let mut hi = [f32::NEG_INFINITY; 3];
+            let mut finite = 0usize;
+            for p in positions.iter() {
+                if !p.iter().all(|v| v.is_finite()) {
+                    continue;
+                }
+                finite += 1;
+                for axis in 0..3 {
+                    lo[axis] = lo[axis].min(p[axis]);
+                    hi[axis] = hi[axis].max(p[axis]);
+                }
+            }
+            if positions.is_empty() {
+                report.push(format!("nx1 bounds {label} {name}: NO POSITIONS"));
+            } else {
+                report.push(format!(
+                    "nx1 bounds {label} {name}: verts={} finite={} lo={lo:?} hi={hi:?} span={:?}",
+                    positions.len(),
+                    finite,
+                    [
+                        hi[0] - lo[0],
+                        hi[1] - lo[1],
+                        hi[2] - lo[2]
+                    ]
+                ));
+            }
+        }
         Some(skel)
     };
 
