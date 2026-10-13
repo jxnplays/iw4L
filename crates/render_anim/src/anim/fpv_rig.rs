@@ -76,6 +76,37 @@ impl FpvMaterialAdmission {
     }
 }
 
+/// Hands clip-versus-draw diagnostic, pose side. `pose_clips` fills this in for
+/// hand 0 every time it runs, including on each early return, and
+/// `hands_draw_report` reads it after skinning and prints one verdict line.
+/// It answers one question: were the hands not animated, or not drawn?
+#[derive(Clone, Debug, Default)]
+pub struct FpvHandsClipDiag {
+    /// "posed", or why `pose_clips` returned `None`.
+    pub exit: &'static str,
+    /// Per right-hand clip: (node, time, weight, tracks landing on hands bones).
+    pub clips: Vec<(usize, f32, f32, usize)>,
+    pub tracks_total: usize,
+    pub tracks_to_hands: usize,
+    pub hands_bones: usize,
+    /// Hands bones the hand-part mask lets through (None = no mask). Full-body
+    /// clips skip the mask, so this only matters for partial clips.
+    pub mask_hands_bones: Option<usize>,
+    /// Hands bones whose parent-relative transform differs from bind.
+    pub moved_bones: usize,
+    pub max_move: f32,
+    pub max_turn_deg: f32,
+    pub max_turn_bone: String,
+}
+
+static HANDS_CLIP_DIAG: std::sync::Mutex<Option<FpvHandsClipDiag>> = std::sync::Mutex::new(None);
+
+fn record_hands_clip(diag: FpvHandsClipDiag) {
+    if let Ok(mut slot) = HANDS_CLIP_DIAG.lock() {
+        *slot = Some(diag);
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct PreparedFpvSurface {
     index_start: u32,
@@ -788,11 +819,17 @@ impl PreparedFpvRig {
         offset: Vec3,
     ) -> Option<FpvHandPose> {
         if hand >= 2 || anims.is_empty() {
+            if hand == 0 {
+                self.note_hands_exit("no clip requested (anims empty)", anims);
+            }
             return None;
         }
         if !anims.iter().all(|anim| self.owns_clip(hand, anim))
             || !left.iter().all(|anim| self.owns_clip(1, anim))
         {
+            if hand == 0 {
+                self.note_hands_exit("clip not owned by this rig (owns_clip false)", anims);
+            }
             return None;
         }
         let bound: Vec<(&PosedClip<'_>, Vec<Option<usize>>, usize)> = anims
@@ -812,6 +849,9 @@ impl PreparedFpvRig {
             .iter()
             .any(|(_, bones, _)| bones.iter().any(Option::is_some))
         {
+            if hand == 0 {
+                self.note_hands_exit("no clip track resolved to any DObj bone", anims);
+            }
             return None;
         }
         let full_body = |anim: &PosedClip<'_>| {
@@ -853,6 +893,9 @@ impl PreparedFpvRig {
         let world = assembly
             .dobj()
             .pose(&instances, &self.parts, Mat4::IDENTITY);
+        if hand == 0 {
+            self.note_hands_posed(&bound, &world);
+        }
         let mut skin = assembly.dobj().skin_matrices(&world);
         for &bone in assembly.collapsed_bones() {
             if let (Some(skin), Some(world)) = (skin.get_mut(bone), world.get(bone)) {
@@ -948,6 +991,226 @@ impl PreparedFpvRig {
 
     /// Skin every slot into the destination buffer the plan published. A vertex
     /// update only: indices, surface ranges and materials are untouched.
+    /// The merged-DObj bone range that belongs to the hands model.
+    fn hands_bone_range(&self) -> Option<std::ops::Range<usize>> {
+        let part = self
+            .composition
+            .parts
+            .iter()
+            .find(|part| part.owner == FpvSurfOwner::Hands)?;
+        let slot = self
+            .composition
+            .assembly
+            .dobj()
+            .models
+            .iter()
+            .find(|slot| slot.base == part.bone_base)?;
+        Some(slot.base..slot.base + slot.bone_count)
+    }
+
+    fn note_hands_exit(&self, exit: &'static str, anims: &[PosedClip<'_>]) {
+        let range = self.hands_bone_range();
+        let mut diag = FpvHandsClipDiag {
+            exit,
+            hands_bones: range.as_ref().map_or(0, |range| range.len()),
+            ..Default::default()
+        };
+        for anim in anims {
+            let on_hands = self.tracks[0]
+                .get(anim.node)
+                .and_then(|tracks| tracks.as_ref())
+                .map_or(0, |tracks| {
+                    tracks
+                        .iter()
+                        .filter(|&&bone| bone != FpvClipTracks::NONE)
+                        .filter(|&&bone| range.as_ref().is_some_and(|r| r.contains(&usize::from(bone))))
+                        .count()
+                });
+            diag.tracks_total += anim.clip.tracks.len();
+            diag.tracks_to_hands += on_hands;
+            diag.clips.push((anim.node, anim.time, anim.weight, on_hands));
+        }
+        record_hands_clip(diag);
+    }
+
+    fn note_hands_posed(
+        &self,
+        bound: &[(&PosedClip<'_>, Vec<Option<usize>>, usize)],
+        world: &[Mat4],
+    ) {
+        let Some(range) = self.hands_bone_range() else {
+            record_hands_clip(FpvHandsClipDiag {
+                exit: "no hands part in the composition",
+                ..Default::default()
+            });
+            return;
+        };
+        let dobj = self.composition.assembly.dobj();
+        let mut diag = FpvHandsClipDiag {
+            exit: "posed",
+            hands_bones: range.len(),
+            ..Default::default()
+        };
+        for (anim, bones, source) in bound {
+            if *source != 0 {
+                continue;
+            }
+            let on_hands = bones.iter().flatten().filter(|b| range.contains(b)).count();
+            diag.tracks_total += bones.len();
+            diag.tracks_to_hands += on_hands;
+            diag.clips.push((anim.node, anim.time, anim.weight, on_hands));
+        }
+        diag.mask_hands_bones = self
+            .hand_parts
+            .as_ref()
+            .map(|masks| range.clone().filter(|&bone| masks[0].get(bone)).count());
+        // Parent-relative, so a moved root does not count as animation.
+        for index in range.clone() {
+            let (Some(now), Some(bone)) = (world.get(index), dobj.bones.get(index)) else {
+                continue;
+            };
+            let (parent_now, parent_bind) = match bone.parent {
+                Some(parent) => match (world.get(parent), dobj.bones.get(parent)) {
+                    (Some(w), Some(b)) => (*w, b.bind_world),
+                    _ => continue,
+                },
+                None => (Mat4::IDENTITY, Mat4::IDENTITY),
+            };
+            let (_, rot_now, pos_now) = (parent_now.inverse() * *now).to_scale_rotation_translation();
+            let (_, rot_bind, pos_bind) =
+                (parent_bind.inverse() * bone.bind_world).to_scale_rotation_translation();
+            let moved = (pos_now - pos_bind).length();
+            let turn = rot_now.angle_between(rot_bind).to_degrees();
+            if !(moved.is_finite() && turn.is_finite()) {
+                diag.moved_bones += 1;
+                diag.max_turn_bone = format!("{} (NON-FINITE)", bone.name);
+                continue;
+            }
+            if moved > 0.01 || turn > 0.5 {
+                diag.moved_bones += 1;
+            }
+            diag.max_move = diag.max_move.max(moved);
+            if turn > diag.max_turn_deg {
+                diag.max_turn_deg = turn;
+                diag.max_turn_bone = bone.name.clone();
+            }
+        }
+        record_hands_clip(diag);
+    }
+
+    /// Hands clip-versus-draw diagnostic, draw side. Call after `skin_into` with
+    /// the rows it wrote (eye space) and this frame's draw list. Returns one
+    /// line: the clip facts from the last `pose_clips`, the draw facts for the
+    /// hands slot, and a verdict naming the first stage that fails.
+    pub fn hands_draw_report(
+        &self,
+        rows: &[[u8; asset_iw4::size::GFX_PACKED_VERTEX]],
+        draws: &[FpvSurfaceDraw],
+        visible: bool,
+    ) -> String {
+        let clip = HANDS_CLIP_DIAG.lock().ok().and_then(|slot| slot.clone());
+
+        // Index span and vertex span of each hand-0 slot, in plan order.
+        let mut index_cursor = 0u32;
+        let mut hands: Option<(usize, usize, u32, u32, &PreparedFpvModel)> = None;
+        let mut gun_bounds: Option<(Vec3, Vec3)> = None;
+        for (slot, (model, _rebase)) in self.slots.iter().zip(&self.geometry.segments) {
+            let span = model.layout.indices.len() as u32;
+            let owner = self.composition.parts[slot.part].owner;
+            if slot.hand == 0 && owner == FpvSurfOwner::Hands && hands.is_none() {
+                hands = Some((
+                    slot.dest_base,
+                    model.layout.dest_vertex_n,
+                    index_cursor,
+                    index_cursor + span,
+                    model.as_ref(),
+                ));
+            }
+            if slot.hand == 0 && owner == FpvSurfOwner::Gun && gun_bounds.is_none() {
+                let end = (slot.dest_base + model.layout.dest_vertex_n).min(rows.len());
+                gun_bounds = eye_bounds(&rows[slot.dest_base.min(end)..end]).map(|b| (b.0, b.1));
+            }
+            index_cursor += span;
+        }
+
+        let (draw_n, tris, bad_indices, verts, nonfinite, in_front, bounds) = match hands {
+            Some((dest_base, vertex_n, start, end, model)) => {
+                let mut draw_n = 0;
+                let mut tris = 0u32;
+                for draw in draws {
+                    if let Some(&(first, count)) = self.geometry.surface_ranges.get(draw.surface as usize) {
+                        if first >= start && first < end {
+                            draw_n += 1;
+                            tris += count / 3;
+                        }
+                    }
+                }
+                let bad = model.layout.indices.iter().filter(|&&i| i as usize >= vertex_n).count();
+                let end_row = (dest_base + vertex_n).min(rows.len());
+                let slice = &rows[dest_base.min(end_row)..end_row];
+                let stats = eye_bounds(slice);
+                let (nonfinite, in_front) = stats.map_or((slice.len(), 0), |s| (s.2, s.3));
+                (draw_n, tris, bad, slice.len(), nonfinite, in_front, stats.map(|s| (s.0, s.1)))
+            }
+            None => (0, 0, 0, 0, 0, 0, None),
+        };
+
+        let verdict = match (&clip, hands.is_some()) {
+            (_, false) => "PART NOT DRAWN: no hands slot in the plan".to_string(),
+            (None, _) => "CLIP NOT APPLIED: pose_clips never ran for hand 0".to_string(),
+            (Some(c), _) if c.exit != "posed" => format!("CLIP NOT APPLIED: {}", c.exit),
+            (Some(c), _) if c.tracks_to_hands == 0 => {
+                "CLIP NOT APPLIED: clip binds, but no track lands on a hands bone".to_string()
+            }
+            (Some(c), _) if c.moved_bones == 0 => {
+                "CLIP BOUND BUT HANDS AT BIND POSE: check time, weight and mask".to_string()
+            }
+            _ if draw_n == 0 => "PART NOT DRAWN: no hands surface in this frame's draw list".to_string(),
+            _ if bad_indices > 0 => "PART DRAWN WITH BAD INDICES: hands indices exceed the slot".to_string(),
+            _ if nonfinite > 0 => "PART DRAWN WITH NON-FINITE VERTICES".to_string(),
+            // Bevy cameras look down -Z, so in front of the eye is z < 0.
+            _ if in_front == 0 => "PART DRAWN BEHIND THE CAMERA: every hands vertex has z >= 0".to_string(),
+            _ if !visible => "PLAN NOT VISIBLE: hands fine, whole viewmodel gated off".to_string(),
+            _ => "CLIP APPLIED AND PART SUBMITTED: hands are in front of the camera; \
+                  check material, alpha, cull mode, depth, or frustum against the gun bounds"
+                .to_string(),
+        };
+
+        let clip_text = match &clip {
+            Some(c) => format!(
+                "exit=\"{}\" clips={:?} tracks_to_hands={}/{} hands_bones={} mask_hands_bones={:?} \
+                 moved_bones={} max_move={:.3} max_turn={:.1}deg@{}",
+                c.exit,
+                c.clips
+                    .iter()
+                    .map(|(node, time, weight, n)| format!("node{node}:t{time:.2}:w{weight:.2}:h{n}"))
+                    .collect::<Vec<_>>(),
+                c.tracks_to_hands,
+                c.tracks_total,
+                c.hands_bones,
+                c.mask_hands_bones,
+                c.moved_bones,
+                c.max_move,
+                c.max_turn_deg,
+                c.max_turn_bone,
+            ),
+            None => "exit=<none>".to_string(),
+        };
+        let fmt_bounds = |b: Option<(Vec3, Vec3)>| {
+            b.map_or("<none>".to_string(), |(lo, hi)| {
+                format!("[{:.1},{:.1},{:.1}]..[{:.1},{:.1},{:.1}]", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z)
+            })
+        };
+        format!(
+            "fpv hands verdict: {verdict} | clip: {clip_text} | draw: hands_draws={draw_n} tris={tris} \
+             plan_hands_n={} verts={verts} bad_indices={bad_indices} nonfinite={nonfinite} \
+             in_front={in_front}/{verts} hands_eye={} gun_eye={} visible={visible}",
+            self.geometry.hands_plan_n,
+            fmt_bounds(bounds),
+            fmt_bounds(gun_bounds),
+        )
+    }
+
     pub fn skin_into(
         &self,
         poses: &[Option<FpvHandPose>; 2],
@@ -1003,4 +1266,27 @@ fn translate_packed_rows(rows: &mut [[u8; asset_iw4::size::GFX_PACKED_VERTEX]], 
         row[4..8].copy_from_slice(&y.to_le_bytes());
         row[8..12].copy_from_slice(&z.to_le_bytes());
     }
+}
+
+/// Eye-space bounds of packed rows: (min, max, non-finite count, z<0 count).
+/// Position is the first three f32s of each row, as `skin_into` writes them.
+fn eye_bounds(rows: &[[u8; asset_iw4::size::GFX_PACKED_VERTEX]]) -> Option<(Vec3, Vec3, usize, usize)> {
+    let mut lo = Vec3::splat(f32::INFINITY);
+    let mut hi = Vec3::splat(f32::NEG_INFINITY);
+    let (mut nonfinite, mut in_front, mut seen) = (0, 0, 0);
+    for row in rows {
+        let f = |at: usize| f32::from_le_bytes([row[at], row[at + 1], row[at + 2], row[at + 3]]);
+        let p = Vec3::new(f(0), f(4), f(8));
+        if !p.is_finite() {
+            nonfinite += 1;
+            continue;
+        }
+        seen += 1;
+        lo = lo.min(p);
+        hi = hi.max(p);
+        if p.z < 0.0 {
+            in_front += 1;
+        }
+    }
+    (seen > 0 || nonfinite > 0).then_some((lo, hi, nonfinite, in_front))
 }

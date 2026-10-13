@@ -1133,6 +1133,25 @@ fn skin_fpv_geometry(
             fpv_plan.revisions.bump_vertices();
             fpv_plan.geometry_ok = !fpv_plan.draws().is_empty();
             fpv_plan.settle_visible();
+            // Hands clip-versus-draw diagnostic: one line, printed when the
+            // verdict changes and every 600 frames otherwise.
+            {
+                static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+                static FRAMES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                let draws = fpv_plan.draws().to_vec();
+                let visible = fpv_plan.visible;
+                if let Some(rows) = fpv_plan.packed_rows_mut() {
+                    let line = rig.hands_draw_report(rows, &draws, visible);
+                    let verdict = line.split(" | ").next().unwrap_or("").to_string();
+                    let tick = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Ok(mut last) = LAST.lock() {
+                        if *last != verdict || tick % 600 == 0 {
+                            *last = verdict;
+                            diag::info!(Fpv, "{line}");
+                        }
+                    }
+                }
+            }
             gaps.clear(RenderGap::FpvViewmodel);
             status.0 = Some(FpvState::Drawn {
                 idle_sampled: frame.idle_sampled,
