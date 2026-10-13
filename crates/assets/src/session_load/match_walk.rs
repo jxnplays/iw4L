@@ -1075,7 +1075,7 @@ pub(super) async fn walk_prepared_match(
         let nx1_one = global
             .images
             .iter()
-            .find(|i| i.namespace == namespace && i.format == 21);
+            .find(|i| i.payload.len() > 4096 && i.decoded.is_some());
         let retail_one = global
             .images
             .iter()

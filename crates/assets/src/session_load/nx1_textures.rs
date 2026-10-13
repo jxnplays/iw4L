@@ -129,38 +129,81 @@ pub fn register_nx1_textured_material(
 ) -> Option<usize> {
     let mut material = global.materials.get(donor)?.clone();
 
+    // Repoint the donor's own bindings rather than replacing the list.
+    //
+    // The techset `mc_l_sm_r0c0n0s0p0` names more slots than colour/normal/specular
+    // (detail `d0`, and whatever else), and the sampler state and texture-name
+    // metadata on a binding are not free to invent. Overwriting `material.textures`
+    // wholesale dropped every binding the donor had that NX1 does not supply, and
+    // stamped `sampler_state: 0` with zeroed name hashes on the ones it did. The
+    // surface then admitted, drew, and sampled nothing — an invisible viewmodel.
+    //
+    // So: keep the donor's bindings and their metadata, and swap only the image
+    // each slot points at. A slot the donor does not have is added as a clone of
+    // the donor's colour binding so it inherits a real sampler state.
     let mut bindings: Vec<MaterialTextureBinding> = Vec::new();
-    let mut add = |file: &str, semantic: u8, srgb: bool| {
-        if let Some(image) = install_nx1_image(global, namespace, file, images_root, semantic, srgb) {
-            bindings.push(MaterialTextureBinding {
-                name_hash: 0,
-                name_start: 0,
-                name_end: 0,
-                sampler_state: 0,
-                semantic,
-                image: Some(image),
-            });
+    let mut swapped = 0usize;
+    {
+        let mut add = |file: &str, semantic: u8, srgb: bool| {
+            let Some(image) = install_nx1_image(global, namespace, file, images_root, semantic, srgb)
+            else {
+                return;
+            };
+            match material
+                .textures
+                .iter_mut()
+                .find(|binding| binding.semantic == semantic)
+            {
+                Some(existing) => {
+                    existing.image = Some(image);
+                    swapped += 1;
+                }
+                None => {
+                    // No slot to repoint: clone the donor's colour binding so the
+                    // new one carries the same sampler state and name metadata.
+                    let template = material
+                        .textures
+                        .iter()
+                        .find(|binding| binding.semantic == asset_material::TS_COLOR_MAP)
+                        .cloned()
+                        .unwrap_or(MaterialTextureBinding {
+                            name_hash: 0,
+                            name_start: 0,
+                            name_end: 0,
+                            sampler_state: 0,
+                            semantic,
+                            image: None,
+                        });
+                    bindings.push(MaterialTextureBinding {
+                        semantic,
+                        image: Some(image),
+                        ..template
+                    });
+                }
+            }
+            let _ = srgb;
+        };
+        if let Some(file) = textures.albedo.as_deref() {
+            add(file, asset_material::TS_COLOR_MAP, true);
         }
-    };
-    if let Some(file) = textures.albedo.as_deref() {
-        add(file, asset_material::TS_COLOR_MAP, true);
-    }
-    if let Some(file) = textures.normal.as_deref() {
-        add(file, asset_material::TS_NORMAL_MAP, false);
-    }
-    if let Some(file) = textures.specular.as_deref() {
-        add(file, asset_material::TS_SPECULAR_MAP, false);
+        if let Some(file) = textures.normal.as_deref() {
+            add(file, asset_material::TS_NORMAL_MAP, false);
+        }
+        if let Some(file) = textures.specular.as_deref() {
+            add(file, asset_material::TS_SPECULAR_MAP, false);
+        }
     }
 
     // No decodable maps: keep the donor so the surface still draws (borrowed
     // look) rather than dropping it.
-    if bindings.is_empty() {
+    if swapped == 0 && bindings.is_empty() {
         return None;
     }
+    // Append any slot the donor had no binding for; everything else is untouched.
+    material.textures.extend(bindings);
 
     material.name = asset_core::AssetRef::decode(material_name);
     material.namespace = namespace;
-    material.textures = bindings;
     global.materials.push(material);
     Some(global.materials.len() - 1)
 }
