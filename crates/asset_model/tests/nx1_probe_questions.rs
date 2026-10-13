@@ -1,4 +1,4 @@
-//! Two questions that need no build to answer.
+﻿//! Two questions that need no build to answer.
 //!
 //! **Hand animation.** "NX1 ships no hand animations" has been repeated in code
 //! comments, the report and the brain notes. That was inferred from *filenames* —
@@ -44,7 +44,7 @@ fn clips_carry_hand_bones() {
             continue;
         };
         let parsed =
-            asset_model::cast_xmodel::read_cast_xanim(&bytes, clip).unwrap_or_else(|e| panic!("{clip}: {e}"));
+            asset_model::cast_xmodel::read_cast_xanim(&bytes, clip, &std::collections::HashMap::new()).unwrap_or_else(|e| panic!("{clip}: {e}"));
         let tracks: Vec<&str> = parsed.tracks.iter().map(|t| t.name.as_str()).collect();
         let hitting_hands = tracks
             .iter()
@@ -122,3 +122,4 @@ fn gun_part_bits_are_absolute_or_offset() {
     }
     println!("(no COLLIDES lines above means gun part bits are gun-local)");
 }
+

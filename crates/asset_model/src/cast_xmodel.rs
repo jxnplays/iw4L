@@ -1,4 +1,4 @@
-//! NX1 `.cast` meshes into one `ModelSkel`.
+﻿//! NX1 `.cast` meshes into one `ModelSkel`.
 //!
 //! A `.cast` file is the CryEngine chunked container, not a fastfile: magic
 //! `cast`, then a `root` node holding `meta` and `modl` children. A node is a
@@ -59,7 +59,7 @@ const NODE_CURV: u32 = 0x7672_7563; // "curv"
 ///
 /// The reciprocal is exact by definition, so the constant is the definition of
 /// an inch and not another fitted number.
-const CAST_TO_WORLD: f32 = 1.0 / 2.54;
+pub const CAST_TO_WORLD: f32 = 1.0 / 2.54;
 
 /// Property ids. Scalars are one character; vectors are the multi-character
 /// constants `'v2'`, `'v3'`, `'v4'`, which land little-endian as `2v`, `3v`.
@@ -386,7 +386,6 @@ fn build_pose(
     bone_names: &[String],
     bone_parents: &[i32],
     bones: &[BoneBind],
-    root_offset: [f32; 3],
 ) -> Option<ModelPoseSrc> {
     if bone_names.len() != bones.len() || bones.is_empty() {
         return None;
@@ -464,28 +463,11 @@ fn build_pose(
         })
         .collect();
     let ordered_names: Vec<String> = order.iter().map(|index| bone_names[*index].clone()).collect();
-    // The offset has to be applied to every `base_mat` entry.
-        //
-        // `base_mat` holds a *world* transform per bone Ã¢â‚¬â€ `DObj::build` does
-        // `Mat4::from_rotation_translation(bq, bt)` and uses it as `bind_world`
-        // directly, with no parent accumulation. `root_rest` is a different thing:
-        // it feeds `bind_rotation`/`bind_translation` and is ignored for
-        // `bind_world`, so setting it moved nothing the view reads. An earlier
-        // version shifted only `base_mat[0]`, which is equally wrong: every other
-        // bone carries its own absolute world translation and would keep the
-        // original offset.
-        //
-        // `trans` holds *parent-relative* offsets and is deliberately left alone,
-        // so the hierarchy's shape is unchanged and only the rig's placement moves.
-        let base_mat: Vec<(bevy::math::Quat, bevy::math::Vec3)> = base_mat
-            .into_iter()
-            .map(|(q, mut t)| {
-                if root_offset != [0.0; 3] {
-                    t += bevy::math::Vec3::from_array(root_offset);
-                }
-                (q, t)
-            })
-            .collect();
+    // `base_mat` holds a *world* transform per bone and `DObj::build` uses it as
+        // `bind_world` directly, with no parent accumulation. It is passed through
+        // exactly as authored -- see the no-recentring note at the call site. An
+        // earlier version shifted every entry by the view offset, displacing the rig
+        // a second time on top of the clip's own `tag_player` translation.
         Some(ModelPoseSrc {
         name: name.to_owned(),
         num_bones: bones.len(),
@@ -501,27 +483,16 @@ fn build_pose(
         quats,
         trans,
         base_mat,
-        // The view offset belongs here, not in `base_mat`.
+        // No `root_rest`. A root bone's bind used to be overridden here with the
+        // view offset, which is the second half of the double shift described at the
+        // call site: `base_mat` displaced the geometry and `root_rest` displaced the
+        // posed world the assembly reads for the camera eye.
         //
-        // `DObj::build` takes a root bone's bind from `root_rest` and ignores
-        // `base_mat` for it entirely:
-        //
-        //     let (rotation, translation) = model.root_rest
-        // Both channels carry the offset, because they feed different consumers
-        // and are not summed.
-        //
-        //   bind_world      <- base_mat[bone]        drives *skinning*, i.e. where
-        //                                            the geometry ends up
-        //   bind_translation<- root_rest (root only) drives the *posed world*, which
-        //                                            the FPV assembly reads for the
-        //                                            camera eye and part placement
-        //
-        // Dropping `root_rest` (855afa1 -> bd42e17) on the theory that the offset
-        // was being applied twice put `view_trans` back to 152.4 and the viewpoint
-        // high again, while `admitted` kept climbing. The two are not a double
-        // count; they are two different answers to two different questions.
-        root_rest: (root_offset != [0.0; 3])
-            .then(|| (bevy::math::Quat::IDENTITY, bevy::math::Vec3::from_array(root_offset))),
+        // The belief that these two "feed different consumers and are not summed"
+        // came from `view_trans` moving when one was dropped. That number cannot
+        // move the viewpoint -- see the algebra at the call site -- so it was never
+        // evidence, and three rebuilds were spent believing it.
+        root_rest: None,
     })
 }
 
@@ -823,15 +794,28 @@ pub fn read_cast_xmodel_materials(
     if surfaces.is_empty() {
         return Err("cast: no mesh node carried geometry".to_owned());
     }
-    // Recentre *before* the pose is built.
-    // Recentre *before* the pose is built.
+    // NO RECENTRING. The pose is built exactly as authored.
     //
-    // `DObj::build` reads its bind transforms from `ModelPoseSrc`, and `base_mat`,
-    // `trans` and `quats` are all built from this `bones` array -- but a root bone's
-    // bind comes from `root_rest`, not `base_mat`, so the offset travels there. See
-    // the note where `root_rest` is set.
-    let view_offset = tag_view_offset(&bone_names, &bone_parents, &bones);
-    let pose = build_pose(name, &bone_names, &bone_parents, &bones, view_offset);
+    // Each NX1 clip authors the whole rig's placement itself. In
+    // `viewmodel_scar_h_idle.cast`, for instance:
+    //
+    //     tag_player  tz = -152.39999
+    //     tag_weapon  at (33.48, -7.31, -9.68)
+    //
+    // `tag_view` sits at local +152.4, so the clip's root puts it at world origin --
+    // the recentring is already in the data, and it is the *pose* that does it, not
+    // the bind.
+    //
+    // This reader used to add a second -152.4 on top, via `base_mat` and again via
+    // `root_rest`, which put the camera 152.4 units (2 ft) off and threw the hands
+    // out to a 500-unit box. The hands diagnostic caught it: `max_move=152.400`, the
+    // offset appearing in the pose change.
+    //
+    // It survived three rebuilds because each removal was judged on `view_trans`,
+    // which provably cannot move the viewpoint -- a uniform shift T cancels out of
+    // `(T*W_view)^-1 * T*W_x = W_view^-1 * W_x`. The number moved; the screen did not.
+    // Three earlier versions of this fix were each validated on the wrong surface.
+    let pose = build_pose(name, &bone_names, &bone_parents, &bones);
 
     let rigid_verts = vert_skin
         .iter()
@@ -976,31 +960,17 @@ pub fn read_cast_xmodel_materials(
 /// part against it, so two meshes authored against different view origins cannot
 /// both be right. Whichever origin wins, the other part ends up hundreds of units
 /// from the camera: admitted, textured, in the draw plan, and invisible.
-fn tag_view_offset(bone_names: &[String], parents: &[i32], bones: &[BoneBind]) -> [f32; 3] {
-    let Some(view) = bone_names.iter().position(|name| name == "tag_view") else {
-        return [0.0; 3];
-    };
-    let mut world = [0.0f32; 3];
-    let mut node = view;
-    for _ in 0..bones.len() {
-        let Some(trans) = bones.get(node).map(|b| b.trans) else {
-            break;
-        };
-        for axis in 0..3 {
-            world[axis] += trans[axis];
-        };
-        match parents.get(node).copied().unwrap_or(-1) {
-            p if p < 0 => break,
-            p => node = p as usize,
-        }
-    }
-    [-world[0], -world[1], -world[2]]
-}
-
 /// Read an NX1 `.cast` mesh, discarding the per-surface material names.
 pub fn read_cast_xmodel(bytes: &[u8], name: &str) -> Result<ModelSkel, String> {
     read_cast_xmodel_materials(bytes, name).map(|(skel, _)| skel)
 }
+
+/// A rig's bind translation per bone name.
+///
+/// A `relative` curve's values are an offset *from* the bone's authored position, so
+/// resolving one needs the bind pose it is relative to. The `.cast` animation file
+/// does not carry it -- it lives in the mesh file -- so the caller supplies it.
+pub type BindTranslations = std::collections::HashMap<String, [f32; 3]>;
 
 /// One bone's channel in an NX1 `.cast` animation.
 ///
@@ -1016,6 +986,25 @@ struct CastCurve {
     values: Vec<f32>,
     /// Frame index per key, as the file states them.
     frames: Vec<u16>,
+    /// The curve's `m` property: `"absolute"` or `"relative"`.
+    ///
+    /// This reader used to treat every curve as absolute, which is what it is for
+    /// 628,967 of the 632,510 curves in the NX1 tree. The other 3,543 are
+    /// `relative`, and they are the ADS transitions -- `tag_ads` on
+    /// `viewmodel_scar_h_ads_down.cast` and its siblings is the bulk of them.
+    /// Applied absolutely, a relative curve replaces the bone's authored position
+    /// with an offset from it, so the sight jumps to the origin instead of leaning
+    /// in. They are translation-only; no relative `rq` curve exists.
+    mode: CurveMode,
+}
+
+/// How a `curv` node's values combine with the bone's bind pose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CurveMode {
+    /// Replaces the bind transform. The overwhelming majority of curves.
+    Absolute,
+    /// An offset *added* to the bind transform.
+    Relative,
 }
 
 /// Read an NX1 `.cast` animation into an [`AnimClip`].
@@ -1030,7 +1019,11 @@ struct CastCurve {
 /// bone the mesh does not have simply has no track and holds its bind pose.
 /// Tracks are emitted only for bones the file animates; bones absent from the
 /// file are not invented, so the rig keeps their bind transform.
-pub fn read_cast_xanim(bytes: &[u8], name: &str) -> Result<xmodel_runtime::AnimClip, String> {
+pub fn read_cast_xanim(
+    bytes: &[u8],
+    name: &str,
+    bind: &BindTranslations,
+) -> Result<xmodel_runtime::AnimClip, String> {
     let mut cursor = Cursor { bytes, at: 0 };
     if cursor.u32()? != MAGIC {
         return Err("cast: magic is not \"cast\"".to_owned());
@@ -1063,6 +1056,12 @@ pub fn read_cast_xanim(bytes: &[u8], name: &str) -> Result<xmodel_runtime::AnimC
         }
         let bone = node.text("nn")?.to_owned();
         let channel = node.text("kp")?.to_owned();
+        // `m` states how the values combine with the bone's bind pose. It is absent
+        // on some curves and means absolute there; only `"relative"` means an offset.
+        let mode = match node.text("m") {
+            Ok(other) if other == "relative" => CurveMode::Relative,
+            _ => CurveMode::Absolute,
+        };
         // `kb` is one byte per key when the frame count fits, else two. Read the
         // declared width rather than assuming, so a long clip is not misread.
         let kb = node.required("kb")?;
@@ -1102,6 +1101,7 @@ pub fn read_cast_xanim(bytes: &[u8], name: &str) -> Result<xmodel_runtime::AnimC
             channel,
             values: values[..expect].to_vec(),
             frames,
+            mode,
         });
         Ok(())
     })?;
@@ -1146,13 +1146,38 @@ pub fn read_cast_xanim(bytes: &[u8], name: &str) -> Result<xmodel_runtime::AnimC
         let translation = match (tx, ty, tz) {
             (Some(tx), Some(ty), Some(tz)) => {
                 let frames = frame_indices(&tx.frames);
+                // A relative curve's values are an *offset* from the bone's authored
+                // position, so the bind translation has to be folded in here or the
+                // bone is read as sitting at the offset itself. `base` is the bind
+                // translation this clip's rig carries for `bone`; it is zero for an
+                // absolute curve, and for a bone the caller has no bind for.
+                let relative = tx.mode == CurveMode::Relative;
+                // Visible, not silent. A relative curve resolved against an empty
+                // bind is still wrong; it just fails quietly unless it says so. This
+                // is the ADS case: the caller has no rig at this point and should be
+                // told rather than left to look right in a log that never mentions it.
+                let base = if relative && !bind.contains_key(bone) {
+                    eprintln!(
+                        "nx1 anim: {name} carries a `relative` curve on `{bone}` but no \
+                         bind translation was supplied; reading it as absolute"
+                    );
+                    [0.0; 3]
+                } else {
+                    bind.get(bone).copied().unwrap_or([0.0; 3])
+                };
                 let values: Vec<[f32; 3]> = (0..tx.values.len())
                     .map(|i| {
-                        [
+                        let mut v = [
                             *ty.values.get(i).unwrap_or(&0.0),
                             *tz.values.get(i).unwrap_or(&0.0),
                             tx.values[i],
-                        ]
+                        ];
+                        if relative {
+                            for axis in 0..3 {
+                                v[axis] += base[axis];
+                            }
+                        }
+                        v
                     })
                     .collect();
                 xmodel_runtime::Translation::FullKeyed(xmodel_runtime::Keyed { values, frames })
@@ -1193,6 +1218,8 @@ fn frame_indices(frames: &[u16]) -> xmodel_runtime::FrameIndices {
         xmodel_runtime::FrameIndices::Sparse(frames.to_vec())
     }
 }
+
+
 
 
 

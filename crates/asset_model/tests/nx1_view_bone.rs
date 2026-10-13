@@ -1,37 +1,42 @@
-//! NX1 rig recentring, asserted the way the draw reads it.
+﻿//! The NX1 rig is used exactly as authored. Nothing is recentred on load.
 //!
-//! Each NX1 viewmodel is authored around its *own* `tag_view`: the hands carry
-//! theirs at bind Z = +152.4, with geometry spanning Z = 110..135 in front of it.
-//! The gun carries none and is authored around the origin.
+//! Every NX1 clip places the rig itself. `viewmodel_scar_h_idle.cast` says so
+//! outright:
 //!
-//! The FPV assembly resolves one view bone for the whole weapon and places every
-//! part against it, so two meshes authored against different view origins cannot
-//! both be right. The owner confirmed the raised viewpoint appears *only* with this
-//! weapon, which pins the cause to this path rather than a general camera bug.
+//! ```text
+//! tag_player  tz = -152.39999
+//! tag_weapon  at (33.48, -7.31, -9.68)
+//! ```
 //!
-//! Three earlier versions of this fix passed their own tests and were still wrong
-//! at runtime, each because the assertion was on the wrong surface:
+//! `tag_view` sits at local +152.4, so the clip's own root translation carries it
+//! to world origin. The recentring is in the data. It is not this reader's job.
 //!
-//!  1. shifting `skel.bones` after the skel existed -- `DObj::build` never reads it;
-//!  2. shifting `base_mat[root]` -- a root's bind comes from `root_rest`, and every
-//!     other bone carries its own absolute world translation, so one entry is wrong
-//!     twice over;
-//!  3. setting *both* `base_mat` and `root_rest` -- the root is then displaced twice
-//!     while every other bone is displaced once, so the rig and its geometry
-//!     disagree by exactly the view offset.
+//! ## Why this file exists
 //!
-//! These build the `DObj` the assembly builds and assert `bind_world`.
+//! Four builds shipped a reader that shifted the rig by -152.4 on top of that,
+//! once through `base_mat` and again through `root_rest`. The result was a camera
+//! 152.4 units (2 ft) off and hands flung out across a 500-unit box. The hands
+//! diagnostic found it by printing `max_move=152.400` -- the offset, reappearing
+//! inside a pose change.
+//!
+//! Each earlier removal was judged on `view_trans`, and each was judged wrong:
+//!
+//! > Dropping `root_rest` put `view_trans` back to 152.4 and the viewpoint high
+//! > again, while `admitted` kept climbing.
+//!
+//! That reasoning does not hold. A uniform shift `T` cancels out of the viewpoint:
+//!
+//! ```text
+//! (T * W_view)^-1 * (T * W_x)  ==  W_view^-1 * W_x
+//! ```
+//!
+//! so no amount of rigid offset changes what the camera sees. `view_trans` moved;
+//! the screen did not. Asserting on it validated every wrong version of this fix.
+//!
+//! These tests therefore assert on the *bind pose as authored*, which is a
+//! property of the file and cannot drift with the camera.
 
 const ROOT: &str = r"E:\Call of Duty Future Warfare\NX1\output\one-gun\tools\saluki\exported_files\nx1";
-
-fn hands() -> asset_model::ModelSkel {
-    read("viewhands_nx_us_army")
-}
-
-
-fn gun() -> asset_model::ModelSkel {
-    read("viewmodel_scar_h")
-}
 
 fn read(cast: &str) -> asset_model::ModelSkel {
     let path = format!("{ROOT}\\models\\{cast}\\{cast}_LOD0.cast");
@@ -46,80 +51,48 @@ fn dobj(skel: &asset_model::ModelSkel) -> xmodel_runtime::DObj {
     xmodel_runtime::DObj::build(&[(pose, None)]).expect("DObj::build")
 }
 
-/// The whole point: after recentring, the hands' view point sits on the camera.
+/// No mesh gets a `root_rest`. It was the second half of the double shift, and
+/// nothing in the NX1 data calls for it -- every clip authors its own root.
 #[test]
-fn hands_view_bone_lands_on_the_origin() {
-    let skel = hands();
+fn no_mesh_carries_a_root_rest() {
+    for cast in ["viewhands_nx_us_army", "viewmodel_scar_h", "viewmodel_scar2"] {
+        let skel = read(cast);
+        let pose = skel.pose.as_ref().expect("pose");
+        assert!(
+            pose.root_rest.is_none(),
+            "{cast} must not override its root bind; the clip places the rig"
+        );
+    }
+}
+
+/// The hands' bind pose must be reported exactly as the file states it, including
+/// `tag_view` sitting back at +152.4. That value is the whole point: it is what the
+/// clip's `tag_player` translation cancels.
+#[test]
+fn the_hands_bind_pose_is_untouched() {
+    let skel = read("viewhands_nx_us_army");
     let dobj = dobj(&skel);
     let view = dobj.find("tag_view").expect("hands carry a tag_view");
     let at = dobj.bones[view].bind_world.w_axis.truncate();
     println!("hands tag_view bind_world = {at:?}");
-    assert!(
-        at.length() < 0.01,
-        "the hands' tag_view must reach the origin through DObj::build, it is at {at:?}"
-    );
-}
-/// The offset belongs in *both* channels, because they feed different consumers.
-///
-/// `bind_world` (from `base_mat`) drives skinning. `bind_translation` (from
-/// `root_rest`) drives the posed world the FPV assembly reads for the camera eye.
-/// They are not summed.
-///
-/// Removing `root_rest` put `view_trans` back to 152.4 and the viewpoint high again
-/// while surface admission kept improving -- which is what gave the change away.
-#[test]
-fn the_offset_rides_in_both_channels() {
-    let skel = hands();
-    let pose = skel.pose.as_ref().expect("pose");
-    let root_rest = pose.root_rest.expect("the posed world needs the offset too");
-    println!("root_rest = {root_rest:?}");
-    assert!(
-        root_rest.1.z.abs() > 100.0,
-        "root_rest carries the view offset for the posed world, it is {root_rest:?}"
-    );
 
-    // And the skinned geometry needs it independently.
-    let dobj = dobj(&skel);
-    let view = dobj.find("tag_view").expect("hands carry a tag_view");
-    let at = dobj.bones[view].bind_world.w_axis.truncate();
+    let scale = asset_model::cast_xmodel::CAST_TO_WORLD;
+    let _ = scale;
     assert!(
-        at.length() < 0.01,
-        "base_mat must carry the same offset for skinning, tag_view is at {at:?}"
+        (at.z - 152.4).abs() < 0.5,
+        "tag_view must stay where the file put it, 152.4 units back; it is at {at:?}"
     );
 }
 
-/// Every bone must move by the offset, not just the root: `base_mat` holds a world
-/// transform per bone and `DObj` uses it directly.
+/// The gun is authored around the origin and carries no `tag_view` at all, so it
+/// must survive a load completely untouched.
 #[test]
-fn every_bone_carries_the_offset() {
-    let skel = hands();
-    let dobj = dobj(&skel);
-    let z = skel.bone_names.len();
-    let moved = dobj
-        .bones
-        .iter()
-        .filter(|b| b.bind_world.w_axis.truncate().z.abs() > 100.0)
-        .count();
-    println!("{moved} of {z} bones sit more than 100 units back");
-    assert!(
-        moved > 0 && moved < z,
-        "expected the hands' bones to have moved off the origin, {moved} of {z} did"
-    );
-}
-
-/// The gun has no `tag_view`, so it must be left exactly as authored. A fix that
-/// moved everything put the gun off screen once already.
-#[test]
-fn a_mesh_without_a_tag_view_is_untouched() {
-    let skel = gun();
+fn the_gun_is_left_exactly_as_authored() {
+    let skel = read("viewmodel_scar_h");
     let pose = skel.pose.as_ref().expect("gun pose");
     assert!(
         !pose.bone_names.iter().any(|n| n == "tag_view"),
         "the gun is expected to have no tag_view bone"
-    );
-    assert!(
-        pose.root_rest.is_none(),
-        "the gun has no view offset to apply, so it must carry no root_rest"
     );
     let dobj = dobj(&skel);
     let root = dobj.bones[0].bind_world.w_axis.truncate();
@@ -130,3 +103,34 @@ fn a_mesh_without_a_tag_view_is_untouched() {
     );
 }
 
+/// The two anchors that pin the whole rig.
+///
+/// `base_mat` is a per-bone world transform used directly for skinning, so any
+/// offset added to it displaces the geometry a second time. The hands are authored
+/// with their root on the origin and `tag_view` 152.4 back. Both holding that exact
+/// relationship is only possible if nothing was added anywhere in the chain.
+#[test]
+fn the_root_and_the_view_bone_stay_exactly_where_authored() {
+    let skel = read("viewhands_nx_us_army");
+    let pose = skel.pose.as_ref().expect("pose");
+    let dobj = dobj(&skel);
+
+    let root = dobj.bones[0].bind_world.w_axis.truncate();
+    let view = dobj.find("tag_view").expect("hands carry a tag_view");
+    let at_view = dobj.bones[view].bind_world.w_axis.truncate();
+
+    println!("hands root = {root:?}  tag_view = {at_view:?}");
+    assert!(
+        root.length() < 0.01,
+        "the hands' root bone is authored on the origin, it is at {root:?}"
+    );
+    assert!(
+        (at_view.z - 152.4).abs() < 0.5 && at_view.x.abs() < 0.01 && at_view.y.abs() < 0.5,
+        "tag_view must sit 152.4 back and nowhere else, it is at {at_view:?}"
+    );
+    assert_eq!(
+        pose.base_mat.len(),
+        pose.num_bones,
+        "base_mat must hold one world transform per bone"
+    );
+}

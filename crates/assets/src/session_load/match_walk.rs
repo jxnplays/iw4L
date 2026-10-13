@@ -1,4 +1,4 @@
-use super::*;
+﻿use super::*;
 
 static NEXT_PRODUCTS_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -69,7 +69,7 @@ fn insert_nx1_xanims(xanims: &mut asset_anim::XAnimBuild, report: &mut Vec<Strin
                 continue;
             }
         };
-        match asset_model::cast_xmodel::read_cast_xanim(&bytes, &stem) {
+        match asset_model::cast_xmodel::read_cast_xanim(&bytes, &stem, &std::collections::HashMap::new()) {
             Ok(clip) => {
                 xanims.insert_decoded(namespace, &stem, clip);
                 inserted += 1;
@@ -1848,4 +1848,5 @@ fn t5_map_under_iw4_rules(
     scripts.set_entities(entities);
     scripts
 }
+
 

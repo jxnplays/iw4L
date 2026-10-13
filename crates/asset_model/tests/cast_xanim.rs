@@ -1,4 +1,4 @@
-//! Real NX1 `.cast` animation reading. Not a dump: these assert the reader
+﻿//! Real NX1 `.cast` animation reading. Not a dump: these assert the reader
 //! produces a usable clip from the actual dumped files.
 
 use asset_model::cast_xmodel::{read_cast_xanim, read_cast_xmodel, read_cast_xmodel_materials};
@@ -81,7 +81,7 @@ fn scar_h_body_material_names_its_own_png_maps() {
 fn anim(name: &str) -> xmodel_runtime::AnimClip {
     let path = format!("{ROOT}\\animations\\{name}.cast");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    read_cast_xanim(&bytes, name).unwrap_or_else(|e| panic!("parse {name}: {e}"))
+    read_cast_xanim(&bytes, name, &std::collections::HashMap::new()).unwrap_or_else(|e| panic!("parse {name}: {e}"))
 }
 
 /// Every NX1 viewmodel clip must parse. One that does not would leave the gun
@@ -101,7 +101,7 @@ fn every_nx1_viewmodel_clip_parses() {
     for file in &names {
         let stem = file.trim_end_matches(".cast");
         let bytes = std::fs::read(format!("{dir}\\{file}")).expect("read");
-        if let Err(e) = read_cast_xanim(&bytes, stem) {
+        if let Err(e) = read_cast_xanim(&bytes, stem, &std::collections::HashMap::new()) {
             failed.push(format!("{stem}: {e}"));
         }
     }
@@ -360,3 +360,4 @@ fn nx1_hands_satisfy_the_draw_contract() {
         panic!("viewhands_nx_us_army would be dropped by draw_build: {e}");
     }
 }
+

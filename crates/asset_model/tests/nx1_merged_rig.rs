@@ -1,4 +1,4 @@
-//! Questions that need the *composed* rig, not one mesh in isolation.
+﻿//! Questions that need the *composed* rig, not one mesh in isolation.
 //!
 //! `tag_red_dot` is in the keep set and its surface binds to it, yet it does not
 //! draw. These check the three explanations that survive once bone remapping is
@@ -139,7 +139,7 @@ fn clip_curves_resolve_to_merged_bones() {
     ] {
         let path = format!("{ROOT}\\animations\\{clip}.cast");
         let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{clip}: {e}"));
-        let parsed = asset_model::cast_xmodel::read_cast_xanim(&bytes, clip)
+        let parsed = asset_model::cast_xmodel::read_cast_xanim(&bytes, clip, &std::collections::HashMap::new())
             .unwrap_or_else(|e| panic!("{clip}: {e}"));
         let total = parsed.tracks.len();
         let resolved = parsed
@@ -169,4 +169,5 @@ fn clip_curves_resolve_to_merged_bones() {
         );
     }
 }
+
 
