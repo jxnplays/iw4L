@@ -40,7 +40,21 @@ pub struct Nx1MaterialTextures {
 const FORMAT_BGRA8: u32 = 21;
 
 /// Decode one NX1 PNG to BGRA8 bytes, or `None` if it is not a plain image.
-fn png_to_bgra8(bytes: &[u8]) -> Option<(u16, u16, Vec<u8>)> {
+///
+/// `force_opaque` discards the PNG's alpha channel and writes 255 everywhere. The
+/// NX1 colour maps are RGBA files whose alpha is **not authored**: measured across
+/// the weapon dump, `weapon_scar_h_col.png` is 0.0% fully-opaque pixels, 43.6% pure
+/// zero and 56.4% partial. That is not a cutout -- a cutout is mostly opaque with
+/// holes -- it is an unpopulated channel being passed through verbatim.
+///
+/// The weapon drew see-through, and its surfaces re-sorted every frame because the
+/// blend state had nothing to sort on, which is the flicker. Both symptoms are this
+/// one channel.
+///
+/// Only the colour map takes this. Specular and normal maps keep whatever alpha
+/// they carry, because a specular map's alpha can be a real gloss mask and throwing
+/// it away would be its own regression.
+fn png_to_bgra8(bytes: &[u8], force_opaque: bool) -> Option<(u16, u16, Vec<u8>)> {
     let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().ok()?;
     let mut buffer = vec![0; reader.output_buffer_size().unwrap_or(0)];
@@ -65,6 +79,7 @@ fn png_to_bgra8(bytes: &[u8]) -> Option<(u16, u16, Vec<u8>)> {
             1 => (px[0], px[0], px[0], 255),
             2 => (px[0], px[0], px[0], px[1]),
             3 => (px[0], px[1], px[2], 255),
+            _ if force_opaque => (px[0], px[1], px[2], 255),
             _ => (px[0], px[1], px[2], px[3]),
         };
         bgra.extend_from_slice(&[b, g, r, a]);
@@ -89,7 +104,7 @@ fn install_nx1_image(
     }
     let path = images_root.join(file);
     let bytes = std::fs::read(&path).ok()?;
-    let (width, height, bgra) = png_to_bgra8(&bytes)?;
+    let (width, height, bgra) = png_to_bgra8(&bytes, semantic == asset_material::TS_COLOR_MAP)?;
     global.images.push(asset_material::AuthoredImage {
         namespace,
         name: asset_core::AssetRef::decode(stem),
