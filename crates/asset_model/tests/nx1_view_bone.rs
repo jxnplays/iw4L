@@ -134,3 +134,62 @@ fn the_root_and_the_view_bone_stay_exactly_where_authored() {
         "base_mat must hold one world transform per bone"
     );
 }
+
+/// The animation's translation axes, pinned to the file that authored them.
+///
+/// `viewmodel_scar_h_idle.cast` states:
+/// ```text
+/// tag_player  tz = -152.39999
+/// tag_weapon  tx = 33.48431, ty = -7.31177, tz = -9.67803
+/// ```
+///
+/// The reader used to assemble those as `[ty, tz, tx]`, rotating every animated
+/// translation by one axis. It put tag_player's Z on Y, dropping the hands 152.4
+/// units below the gun -- which reads as a raised viewpoint, because the gun was
+/// never high, the arms were down.
+///
+/// tag_weapon is the sharper tell: 33.48 lateral, 7.31 down, 9.68 forward is an
+/// ordinary grip offset. Rotated, it reads (-7.31, -9.68, 33.48) -- sideways,
+/// sunken, and 33 units toward the camera.
+#[test]
+fn animation_translation_axes_are_x_y_z() {
+    let path = format!("{ROOT}\\animations\\viewmodel_scar_h_idle.cast");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read: {e}"));
+    let clip = asset_model::cast_xmodel::read_cast_xanim(
+        &bytes,
+        "viewmodel_scar_h_idle",
+        &std::collections::HashMap::new(),
+    )
+    .unwrap_or_else(|e| panic!("parse: {e}"));
+
+    let at = |bone: &str| -> [f32; 3] {
+        let track = clip
+            .tracks
+            .iter()
+            .find(|t| t.name == bone)
+            .unwrap_or_else(|| panic!("no track for {bone}"));
+        let keyed = match &track.translation {
+            xmodel_runtime::Translation::FullKeyed(k) => k,
+            other => panic!("{bone}: expected a keyed translation, got {other:?}"),
+        };
+        keyed.values[0]
+    };
+
+    let player = at("tag_player");
+    println!("tag_player = {player:?}");
+    assert!(
+        (player[2] + 152.4).abs() < 0.1 && player[0].abs() < 0.1 && player[1].abs() < 0.1,
+        "tag_player is authored at (0, 0, -152.4); it read as {player:?}, so the \
+         translation axes are rotated"
+    );
+
+    let weapon = at("tag_weapon");
+    println!("tag_weapon = {weapon:?}");
+    assert!(
+        (weapon[0] - 33.484).abs() < 0.01
+            && (weapon[1] + 7.312).abs() < 0.01
+            && (weapon[2] + 9.678).abs() < 0.01,
+        "tag_weapon is authored at (33.484, -7.312, -9.678); it read as {weapon:?}, \
+         so the translation axes are rotated"
+    );
+}

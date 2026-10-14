@@ -1167,10 +1167,25 @@ pub fn read_cast_xanim(
                 };
                 let values: Vec<[f32; 3]> = (0..tx.values.len())
                     .map(|i| {
+                        // tx is X, ty is Y, tz is Z.
+                        //
+                        // This used to assemble [ty, tz, tx], which rotates every
+                        // animated translation by one axis. It was invisible for most
+                        // of the tree and catastrophic for the view bones:
+                        // viewmodel_scar_h_idle authors tag_player tz = -152.4 to push
+                        // the rig back along the view axis, and the rotation delivered
+                        // it on Y, dropping the hands 152.4 units below the gun. That
+                        // is the raised viewpoint -- the gun was never high, the arms
+                        // were down.
+                        //
+                        // tag_weapon shows the same rotation: authored tx=33.48,
+                        // ty=-7.31, tz=-9.68 -- 33 lateral, 7 down, 9 forward, an
+                        // ordinary grip offset -- and read as (-7.31, -9.68, 33.48),
+                        // sideways, sunken, and 33 units toward the camera.
                         let mut v = [
+                            tx.values[i],
                             *ty.values.get(i).unwrap_or(&0.0),
                             *tz.values.get(i).unwrap_or(&0.0),
-                            tx.values[i],
                         ];
                         if relative {
                             for axis in 0..3 {
