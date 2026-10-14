@@ -1,2 +1,8 @@
-[alias]
+﻿[alias]
 xtask = "run --quiet --package xtask --"
+[build]
+# This machine has 32 GB and two agents working on it. Cargo's default here is
+# one job per core (16), and several of these crates peak in the GB per rustc
+# process -- 16 concurrent links is what hard-locked the machine on 2026-10-13.
+# Three concurrent jobs keeps a build inside roughly 6-8 GB.
+jobs = 3
