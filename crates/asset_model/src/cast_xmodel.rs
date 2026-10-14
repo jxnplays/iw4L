@@ -386,6 +386,8 @@ fn build_pose(
     bone_names: &[String],
     bone_parents: &[i32],
     bones: &[BoneBind],
+    // Absolute world transform per bone, straight from the file's wp/wr.
+    world_bones: &[([f32; 4], [f32; 3])],
 ) -> Option<ModelPoseSrc> {
     if bone_names.len() != bones.len() || bones.is_empty() {
         return None;
@@ -469,61 +471,62 @@ fn build_pose(
     // and its cumulative position is 30.9 -- inside. Its raw lp is 7.8, outside the
     // surface entirely. Same for `j_grenade_m203`: surface x 54.8-62.1, cumulative
     // 58.5, raw lp 35.4. The mesh agrees with the cumulative reading, not the raw one.
-    let mut world_pos = vec![[0.0f32; 3]; bones.len()];
-    let mut world_rot = vec![[0.0f32; 4]; bones.len()];
-    let mut resolved = vec![false; bones.len()];
-    for position in 0..order.len() {
-        // `order` is parents-before-children, so walking it once resolves every
-        // ancestor first and this only ever reads already-solved values.
-        let index = order[position];
-        let bind = &bones[index];
-        let (parent_pos, parent_rot) = match parent_of(index) {
-            p if p >= 0 && resolved[p as usize] => {
-                let parent = p as usize;
-                (world_pos[parent], world_rot[parent])
-            }
-            _ => ([0.0f32; 3], [0.0, 0.0, 0.0, 1.0]),
-        };
-        let rot = bevy::math::Quat::from_xyzw(
-            bind.quat[0],
-            bind.quat[1],
-            bind.quat[2],
-            bind.quat[3],
-        );
-        let parent_quat = bevy::math::Quat::from_xyzw(
-            parent_rot[0],
-            parent_rot[1],
-            parent_rot[2],
-            parent_rot[3],
-        );
-        let pos = bevy::math::Vec3::from_array(parent_pos) + parent_quat * bevy::math::Vec3::from_array(bind.trans);
-        world_pos[index] = pos.to_array();
-        let world = parent_quat * rot;
-        world_rot[index] = [world.x, world.y, world.z, world.w];
-        resolved[index] = true;
-    }
+    // `base_mat` is an absolute WORLD transform per bone, and `DObj::build` uses it
+    // as `bind_world` with no parent accumulation -- it is the right half of every
+    // skin matrix (`world[b] * bind_world.inverse()`), so at bind pose it must equal
+    // the posed world exactly.
+    //
+    // The file states that transform: `wp`/`wr` on every Bone node, already
+    // composed down the chain. Those are used directly. An earlier version stored
+    // the local `lp`/`lr` pair here, which is what broke the weapon:
+    //
+    //   hands: 63 of 66 bones differ from their world transform by >1 cm, worst
+    //          tag_weapon_right at 152.5 cm. 9 of 66 differ in rotation too.
+    //   gun:   18 of 35 differ by >1 cm, worst 45.3 cm.
+    //
+    // A middle version composed the chain by hand but still took the rotation from
+    // `lr`, leaving 42 of the 45 bones the hands actually deform wrong by up to
+    // 180 degrees -- it cut the hand error from 59 inches to 10 and still did not
+    // work. Using both `wp` and `wr` is the whole fix.
+    //
+    // `trans` and `quats` above stay local: the pose contract is parent-relative
+    // and `DObj::compose` accumulates it down the hierarchy itself.
+    // `base_mat` is an absolute WORLD transform per bone, and `DObj::build` uses it
+    // as `bind_world` with no parent accumulation -- the right half of every skin
+    // matrix (`world[b] * bind_world.inverse()`).
+    //
+    // The file states that transform directly: `wp`/`wr` on every Bone node, already
+    // composed down the chain. Those are used verbatim. Storing the local `lp`/`lr`
+    // pair here instead is what broke the weapon --
+    //
+    //   hands: 63 of 66 bones differ from their world transform by >1 cm, worst
+    //          tag_weapon_right at 152.5 cm; 9 of 66 also differ in rotation, every
+    //          elbow, wrist and finger.
+    //   gun:   18 of 35 differ by >1 cm, worst 45.3 cm.
+    //
+    // A middle version composed the chain by hand but still took rotation from `lr`,
+    // leaving 42 of the 45 bones the hands actually deform wrong by up to 180
+    // degrees: it cut hand error from 59 inches to 10 and still did not work.
+    //
+    // `trans` and `quats` above stay local -- the pose contract is parent-relative
+    // and `DObj::compose` accumulates that itself.
     let base_mat: Vec<(bevy::math::Quat, bevy::math::Vec3)> = order
         .iter()
         .map(|index| {
-            let bind = &bones[*index];
+            let (rotation, translation) = world_bones[*index];
             (
                 bevy::math::Quat::from_xyzw(
-                    bind.quat[0],
-                    bind.quat[1],
-                    bind.quat[2],
-                    bind.quat[3],
+                    rotation[0],
+                    rotation[1],
+                    rotation[2],
+                    rotation[3],
                 ),
-                bevy::math::Vec3::from_array(world_pos[*index]),
+                bevy::math::Vec3::from_array(translation),
             )
         })
         .collect();
     let ordered_names: Vec<String> = order.iter().map(|index| bone_names[*index].clone()).collect();
-    // `base_mat` holds a *world* transform per bone and `DObj::build` uses it as
-        // `bind_world` directly, with no parent accumulation. It is passed through
-        // exactly as authored -- see the no-recentring note at the call site. An
-        // earlier version shifted every entry by the view offset, displacing the rig
-        // a second time on top of the clip's own `tag_player` translation.
-        Some(ModelPoseSrc {
+    Some(ModelPoseSrc {
         name: name.to_owned(),
         num_bones: bones.len(),
         num_root_bones,
@@ -695,6 +698,8 @@ pub fn read_cast_xmodel_materials(
     let mut surface_material_names: Vec<Option<CastSurfaceMaterial>> = Vec::new();
     let mut bone_names: Vec<String> = Vec::new();
     let mut bones: Vec<BoneBind> = Vec::new();
+    // Absolute world transform per bone, from wp/wr, parallel to ones.
+    let mut world_bones: Vec<([f32; 4], [f32; 3])> = Vec::new();
     let mut bone_parents: Vec<i32> = Vec::new();
     // Tag bones are ordinary bones carrying a reserved name, so the index is
     // found by name rather than by a node type. Absent stays absent: a gun
@@ -706,8 +711,33 @@ pub fn read_cast_xmodel_materials(
 
     let mut visit = |id: u32, node: &Node<'_>| -> Result<(), String> {
         if id == NODE_BONE {
+            // Every Bone node states its transform twice: `lp`/`lr` are the
+            // PARENT-RELATIVE local transform and `wp`/`wr` are the absolute world
+            // transform already composed down the chain. `wp`/`wr` are the authored
+            // answer and this reader uses them directly -- see the note at the
+            // `base_mat` build, where storing the local pair there is what broke
+            // the weapon.
+            //
+            // Measured divergence between the two, per bone:
+            //
+            //   hands: 63 of 66 bones differ by >1 cm in position (worst
+            //          tag_weapon_right, 152.5 cm) and 9 of 66 differ by >1 deg in
+            //          rotation -- every elbow, wrist and finger bone.
+            //   gun:   18 of 35 differ by >1 cm (worst 45.3 cm); none differ in
+            //          rotation.
+            //
+            // `lr`/`lp` are still read: `trans` is parent-relative by contract and
+            // the pose must stay local.
             let position = node.floats("lp", PROP_VECTOR3, 1)?;
             let rotation = node.floats("lr", PROP_VECTOR4, 1)?;
+            let world_position = node.floats("wp", PROP_VECTOR3, 1).unwrap_or_default();
+            let world_rotation = node.floats("wr", PROP_VECTOR4, 1).unwrap_or_default();
+            if world_position.len() < 3 || world_rotation.len() < 4 {
+                // Falling back to the local pair would silently reintroduce the bug
+                // this whole change exists to fix, so a missing world transform is an
+                // error rather than a wrong answer nobody notices.
+                return Err("cast: bone carries no `wp`/`wr` world transform".to_owned());
+            }
             bone_names.push(node.text("n")?.to_owned());
             // `p` is the parent bone index, -1 for a root.
             let parent = node
@@ -726,8 +756,22 @@ pub fn read_cast_xmodel_materials(
                 quat: [rotation[0], rotation[1], rotation[2], rotation[3]],
                 trans: [position[0], position[1], position[2]],
             });
+            // The absolute world transform the file also states on every bone.
+            // Kept beside the local pair rather than inside `BoneBind` because
+            // `BoneBind` is constructed in four places and only this reader has
+            // `wp`/`wr` to offer.
+            world_bones.push((
+                [
+                    world_rotation[0],
+                    world_rotation[1],
+                    world_rotation[2],
+                    world_rotation[3],
+                ],
+                [world_position[0], world_position[1], world_position[2]],
+            ));
             return Ok(());
         }
+
         if id != NODE_MESH || node.get("vp").is_none() {
             return Ok(());
         }
@@ -870,7 +914,7 @@ pub fn read_cast_xmodel_materials(
     // which provably cannot move the viewpoint -- a uniform shift T cancels out of
     // `(T*W_view)^-1 * T*W_x = W_view^-1 * W_x`. The number moved; the screen did not.
     // Three earlier versions of this fix were each validated on the wrong surface.
-    let pose = build_pose(name, &bone_names, &bone_parents, &bones);
+    let pose = build_pose(name, &bone_names, &bone_parents, &bones, &world_bones);
 
     let rigid_verts = vert_skin
         .iter()
@@ -1288,6 +1332,9 @@ fn frame_indices(frames: &[u16]) -> xmodel_runtime::FrameIndices {
         xmodel_runtime::FrameIndices::Sparse(frames.to_vec())
     }
 }
+
+
+
 
 
 
