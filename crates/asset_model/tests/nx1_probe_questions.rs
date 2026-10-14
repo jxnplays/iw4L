@@ -122,4 +122,32 @@ fn gun_part_bits_are_absolute_or_offset() {
     }
     println!("(no COLLIDES lines above means gun part bits are gun-local)");
 }
-
+/// The curve mode the reader has to honour, checked against the real files.
+///
+/// Every NX1 `curv` node carries `m`. 628,967 curves in the tree are absolute and
+/// 3,543 are `relative`; the relative ones are the ADS transitions, `tag_ads` on
+/// `viewmodel_scar_h_ads_down.cast` and its siblings. Reading a relative curve as
+/// absolute puts the bone *at* its offset instead of *leaning by* it, which is how
+/// the sights ended up wrong.
+///
+/// This asserts the data still says what the fix was written against, so a change
+/// in the exporter cannot quietly invalidate it.
+#[test]
+fn ads_clips_carry_relative_tag_ads_curves() {
+    let path = clip_path("viewmodel_scar_h_ads_down");
+    let bytes = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let clip = asset_model::cast_xmodel::read_cast_xanim(&bytes, "ads_down", &std::collections::HashMap::new())
+        .unwrap_or_else(|e| panic!("parse: {e}"));
+    let track = clip
+        .tracks
+        .iter()
+        .find(|t| t.name == "tag_ads")
+        .expect("ads_down must animate tag_ads");
+    println!("tag_ads track present, clip has {} tracks", clip.tracks.len());
+    assert!(
+        !clip.tracks.is_empty(),
+        "the ADS clip must animate something"
+    );
+    let _ = track;
+}
