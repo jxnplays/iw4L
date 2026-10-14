@@ -1,4 +1,4 @@
-//! Which bones each surface actually uses, so attachment visibility is derived
+﻿//! Which bones each surface actually uses, so attachment visibility is derived
 //! from the mesh rather than from the donor row's tag names.
 //!
 //! The donor IW4 `scar` row carries ten attachment tags. NX1's rig has a bone for
@@ -75,5 +75,40 @@ fn each_surface_and_the_bones_it_uses() {
         .map(|(_, n)| n.as_str())
         .collect();
     println!("bones no surface uses ({never:?})");
+}
+
+
+/// Which bone *indexes* the hide set covers, and whether the gun body is in it.
+///
+/// The mesh bundles every attachment -- Masterkey, M203, thermal scope, ACOG, EOTech,
+/// motion tracker, suppressor -- alongside four real SCAR-H surfaces. Only those
+/// four should survive attachment hiding: `j_gun` (1980 tris), `tag_clip`,
+/// `j_front_ring` and `j_reload`. The other 30 are attachments.
+#[test]
+fn the_hide_set_must_not_contain_the_gun_body() {
+    let path = format!(r"{ROOT}\models\viewmodel_scar_h\viewmodel_scar_h_LOD0.cast");
+    let bytes = std::fs::read(&path).expect("gun cast");
+    let (skel, _) = asset_model::cast_xmodel::read_cast_xmodel_materials(&bytes, "gun")
+        .expect("parse the gun cast");
+
+    for (i, n) in skel.bone_names.iter().enumerate() {
+        println!("bone {i:>2}  {n}");
+    }
+
+    // The log records the NX1 hide words. Reproduce the bit test exactly.
+    let hide: [u32; 6] = [1886581759, 3758096384, 0, 0, 0, 0];
+    let hidden: Vec<(usize, &str)> = skel
+        .bone_names
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i < 192 && hide[*i >> 5] & (0x8000_0000u32 >> (*i & 31)) != 0)
+        .map(|(i, n)| (i, n.as_str()))
+        .collect();
+    println!("\nHIDDEN BONES ({hidden:?})");
+
+    for keep in ["j_gun", "tag_clip", "j_front_ring", "j_reload"] {
+        let idx = skel.bone_names.iter().position(|n| n == keep);
+        println!("{keep} -> index {idx:?}");
+    }
 }
 

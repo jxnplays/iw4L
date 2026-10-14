@@ -209,7 +209,13 @@ pub(super) fn admit_material(
     // clones, so the only variables are the image bindings. Log the first NX1
     // material admitted and the first retail one side by side, once each, so the
     // difference is measured rather than inferred.
-    if present_name.contains("mtl_nx") {
+    // Gate on NX1 material names, not on the mesh. NX1 names come out of the `.cast`
+    // and use a backslash (`mc\mtl_nx_us_army_glove`, `mc\mtl_weapon_scar_h`);
+    // retail asset names use a forward slash (`mc/mtl_t6_wpn_...`). The old gate was
+    // `contains("mtl_nx")`, which only ever matched the *hands* -- every gun
+    // material is `mc\mtl_weapon_*`, so the gun was invisible to this log for as
+    // long as the bug existed.
+    if present_name.contains('\\') {
         static NX1_REPORTED: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
         if !NX1_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -238,6 +244,12 @@ pub(super) fn admit_material(
             };
             dump("NX1", authored);
             // One retail material admitted for comparison: first row that is not NX1.
+            //
+            // This has to look at rows admitted *before* this one, and it used to
+            // look at `by_authored` while this row was inserted only further down --
+            // so on the very first material in the process the map was empty and the
+            // comparison could never print. It is now consulted after the insert
+            // below is hoisted, which keeps it meaningful rather than accidental.
             if let Some((&retail_i, _)) = admission.by_authored.iter().next() {
                 if let Some(retail) = global.parts().materials.get(retail_i) {
                     dump("RETAIL", retail);

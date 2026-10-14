@@ -193,3 +193,91 @@ fn animation_translation_axes_are_x_y_z() {
          so the translation axes are rotated"
     );
 }
+
+
+/// `base_mat` must be a WORLD transform, and `lp` is parent-relative.
+///
+/// The mesh's own vertex positions are the oracle -- independent data the reader
+/// never had to agree with. A surface skinned to bone B must sit near B's world
+/// position. Measured from the real file:
+///
+///   j_slider_m203    surface spans x  23.0 .. 48.2   cumulative x 30.9   raw lp x  7.8
+///   j_grenade_m203   surface spans x  54.8 .. 62.1   cumulative x 58.5   raw lp x 35.4
+///
+/// The cumulative reading falls inside each surface's own span. The raw `lp`
+/// reading falls outside. Storing `lp` raw therefore put these bones 23 units away
+/// from the geometry they drive.
+#[test]
+fn base_mat_is_world_not_the_raw_parent_relative_lp() {
+    let skel = read("viewmodel_scar_h");
+    let pose = skel.pose.as_ref().expect("gun pose");
+
+    for bone in ["j_gun", "tag_m203", "j_slider_m203", "j_grenade_m203", "tag_red_dot"] {
+        let index = skel
+            .bone_names
+            .iter()
+            .position(|n| n == bone)
+            .unwrap_or_else(|| panic!("no bone {bone}"));
+        let world = pose.base_mat[index].1;
+
+        // Every surface skinned to this bone.
+        let mut surfaces = Vec::new();
+        for (surface, bits) in skel.surface_part_bits.iter().enumerate() {
+            let uses = (0..192).any(|b| {
+                b < skel.bone_names.len()
+                    && bits[b >> 5] & (0x8000_0000u32 >> (b & 31)) != 0
+            }) && skel
+                .surface_part_bits
+                .iter()
+                .enumerate()
+                .any(|(s, other)| s == surface && other[index >> 5] & (0x8000_0000u32 >> (index & 31)) != 0);
+            if uses {
+                surfaces.push(surface);
+            }
+        }
+
+        let (vstart, vcount) = skel
+            .surface_vertex_ranges
+            .get(index.min(skel.surface_vertex_ranges.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or((0, 0));
+        let _ = (vstart, vcount);
+
+        // Bounds of every surface this bone drives.
+        let mut lo = [f32::INFINITY; 3];
+        let mut hi = [f32::NEG_INFINITY; 3];
+        let mut any = false;
+        for surface in &surfaces {
+            let (base, count) = match skel.surface_vertex_ranges.get(*surface) {
+                Some(r) => *r,
+                None => continue,
+            };
+            for v in base..base + count {
+                let p = skel.positions[v];
+                for a in 0..3 {
+                    lo[a] = lo[a].min(p[a]);
+                    hi[a] = hi[a].max(p[a]);
+                }
+                any = true;
+            }
+        }
+        if !any {
+            continue;
+        }
+        println!(
+            "{bone}: base_mat {:?}  surfaces {:?}  x {:.1}..{:.1}",
+            world, surfaces, lo[0], hi[0]
+        );
+
+        for a in 0..3 {
+            assert!(
+                world[a] >= lo[a] - 1.0 && world[a] <= hi[a] + 1.0,
+                "{bone}'s base_mat {world:?} sits outside the x{}-range of the geometry \
+                 it drives ({lo:?}..{hi:?}); base_mat must be the cumulative world \
+                 position, not the raw parent-relative lp",
+                (b'a' + a as u8) as char
+            );
+        }
+    }
+}
+

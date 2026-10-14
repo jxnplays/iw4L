@@ -452,13 +452,68 @@ fn build_pose(
         trans.push(bones[*index].trans);
     }
 
+    // `base_mat` is a *world* transform per bone, and `DObj::build` uses it as
+    // `bind_world` with no parent accumulation -- it feeds the right half of every
+    // skin matrix (`world[b] * bind_world.inverse()`).
+    //
+    // `lp` is PARENT-RELATIVE. It was stored here raw, as if it were already a world
+    // position, so `bind_world` was wrong for every bone that is not a direct child
+    // of a root sitting on the origin. The error is `cumulative(lp chain) - lp[b]`.
+    //
+    // On the hands that reaches 145 cm. `j_wrist_le` has cumulative z = 144.3 but a
+    // raw lp z of 0, so every hand bone was displaced by up to 57 inches and 61% of
+    // hand vertices landed behind the camera. That is why the arms never appeared:
+    // they were drawn, and scattered outside the view.
+    //
+    // Verified against the mesh itself: `j_slider_m203`'s surface spans x 23.0-48.2
+    // and its cumulative position is 30.9 -- inside. Its raw lp is 7.8, outside the
+    // surface entirely. Same for `j_grenade_m203`: surface x 54.8-62.1, cumulative
+    // 58.5, raw lp 35.4. The mesh agrees with the cumulative reading, not the raw one.
+    let mut world_pos = vec![[0.0f32; 3]; bones.len()];
+    let mut world_rot = vec![[0.0f32; 4]; bones.len()];
+    let mut resolved = vec![false; bones.len()];
+    for position in 0..order.len() {
+        // `order` is parents-before-children, so walking it once resolves every
+        // ancestor first and this only ever reads already-solved values.
+        let index = order[position];
+        let bind = &bones[index];
+        let (parent_pos, parent_rot) = match parent_of(index) {
+            p if p >= 0 && resolved[p as usize] => {
+                let parent = p as usize;
+                (world_pos[parent], world_rot[parent])
+            }
+            _ => ([0.0f32; 3], [0.0, 0.0, 0.0, 1.0]),
+        };
+        let rot = bevy::math::Quat::from_xyzw(
+            bind.quat[0],
+            bind.quat[1],
+            bind.quat[2],
+            bind.quat[3],
+        );
+        let parent_quat = bevy::math::Quat::from_xyzw(
+            parent_rot[0],
+            parent_rot[1],
+            parent_rot[2],
+            parent_rot[3],
+        );
+        let pos = bevy::math::Vec3::from_array(parent_pos) + parent_quat * bevy::math::Vec3::from_array(bind.trans);
+        world_pos[index] = pos.to_array();
+        let world = parent_quat * rot;
+        world_rot[index] = [world.x, world.y, world.z, world.w];
+        resolved[index] = true;
+    }
     let base_mat: Vec<(bevy::math::Quat, bevy::math::Vec3)> = order
         .iter()
         .map(|index| {
             let bind = &bones[*index];
             (
-                bevy::math::Quat::from_xyzw(bind.quat[0], bind.quat[1], bind.quat[2], bind.quat[3]),
-                bevy::math::Vec3::from_array(bind.trans),
+                bevy::math::Quat::from_xyzw(
+                    bind.quat[0],
+                    bind.quat[1],
+                    bind.quat[2],
+                    bind.quat[3],
+                ),
+                bevy::math::Vec3::from_array(world_pos[*index]),
             )
         })
         .collect();
