@@ -10,38 +10,51 @@
 
 ## MEMORY BUDGET — READ FIRST
 
-**Hard cap: ~15 GB. This box has 32 GB and two agents on it.**
+**Hard limit: 15 GB. This box has 32 GB and two agents on it.**
 
-The machine hard-locked on 2026-10-13 because cargo defaulted to **one job per
-core (16)** and several of these crates peak in the GB per `rustc`/`link`
-process. 16 concurrent links on a 32 GB box, times two agents, is what killed it.
+The machine hard-locked on 2026-10-13. Cargo defaulted to **one job per core
+(16)** and several of these crates peak in the GB per `rustc`/`link` process.
+16 concurrent links, times two agents, is what killed it.
 
-**This is now pinned in `.cargo/config.toml`:**
+### What is actually enforced
+
+**`.cargo/config.toml`** — committed, applies to both agents:
 
 ```toml
 [build]
 jobs = 3
 ```
 
-That is committed and applies to both agents in this repo. **Do not remove it.**
-If it needs raising, raise it to 4 — not to the default.
+This is the real control. It stops cargo ever *creating* 16 concurrent
+processes, which was the cause. It is not a ceiling — it is a concurrency limit,
+and it is the thing that was actually wrong.
 
-Rules that follow from it:
+**Do not remove it.** If it needs raising, raise it to 4. Not to the default.
 
-- **Never run `cargo test` at workspace scope.** It links ~130 test binaries.
-  Always target: `cargo test -p <crate> --test <name> --offline`.
-- Never run a workspace-wide `cargo test` while another agent is building.
-- `clean.ps1` after every build.
-- Cheap and always safe: reading files, `git`, `grep`, Python over the `.cast`
-  files. Those found the last three bugs anyway, and they use no meaningful RAM.
+### What I tried and did NOT ship
 
----
+I attempted a true kernel ceiling — a wrapper that puts the process tree in a
+Windows Job Object with `JOB_OBJECT_LIMIT_JOB_MEMORY`. It does not work in this
+environment: this shell already runs inside a job, `AssignProcessToJobObject`
+terminated every child regardless of the limit, and a watchdog fallback could not
+reliably bind its arguments under Windows PowerShell 5.1. Two scripts were written
+(`cargo-capped.ps1`, `capped.ps1`) and **both were deleted** — shipping unverified
+tooling that claims to protect the machine is worse than not having it.
 
-## THE OTHER RULE
+So the limit is enforced by `jobs = 3` plus the rules below, not by a kernel
+guarantee. Being straight about that.
 
-**Do not run `cargo build`/`cargo test` while another agent is also running cargo.**
-Even capped at `jobs = 3`, two concurrent builds can still reach the cap.
-Coordinate first.
+### Rules I follow, in order
+
+1. **Never `cargo test` at workspace scope.** It links ~130 test binaries and is
+   what grew `target/debug` to 63.59 GB. Always targeted:
+   `cargo test -p <crate> --test <name> --offline`.
+2. **Check free RAM before building.** If it is under ~16 GB free, do not start —
+   the other agent is probably already building. Wait.
+3. **Never run cargo while the other agent is building.** Coordinate first.
+4. `clean.ps1 -KeepDebug` after every build.
+5. Reading files, `git`, `grep`, and Python over the `.cast` files are free and
+   are what found the last three bugs anyway. Prefer them over building.
 
 ---
 
