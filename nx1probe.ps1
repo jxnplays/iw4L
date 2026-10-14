@@ -24,8 +24,7 @@ $proc = $null
 try {
   $env:IW4L_GAMES = 'X:\AI\Projects\iw4l-games'
   # The class store overrides --cmds, so a stale profile silently wins.
-  $profile = Join-Path $repo 'target\release\profile'
-  if (Test-Path $profile) { Remove-Item $profile -Recurse -Force -ErrorAction SilentlyContinue }
+  # Keep the profile: it holds classes.txt, and spawn <name> needs a class to exist.
 
   $proc = Start-Process -FilePath $exe -ArgumentList 'menu','--cmds',$Cmds `
     -WorkingDirectory (Join-Path $repo 'target\release') -PassThru -NoNewWindow
