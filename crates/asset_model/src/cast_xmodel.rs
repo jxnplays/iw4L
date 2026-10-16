@@ -842,7 +842,17 @@ pub fn read_cast_xmodel_materials(
 
         let index_base = indices.len();
         let first = u32::try_from(vertex_base).unwrap_or(0);
-        indices.extend(mesh_indices.iter().map(|&index| first + index));
+        // Winding. Cast stores every face counter-clockwise (right-handed), as its
+        // spec requires; the exporters reverse IW's own clockwise order to get
+        // there. The colour pass draws IW4 xmodels with `FrontFace::Cw` and culls
+        // back faces, so the cast order fed through unchanged makes every outward
+        // face a back face: the near side of the gun is culled and its inside
+        // walls draw instead, which is what reads as a see-through weapon body.
+        // Swapping the last two corners restores IW's order. The index *set* per
+        // surface is unchanged, so the range tables below still hold.
+        for tri in mesh_indices.chunks_exact(3) {
+            indices.extend([first + tri[0], first + tri[2], first + tri[1]]);
+        }
         // The packed row is the IW4 vertex the GPU reads back: the same four
         // values the decoded arrays carry, in the packed layout. W is unused.
         for vertex in 0..vertex_count {

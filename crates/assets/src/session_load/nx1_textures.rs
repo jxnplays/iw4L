@@ -98,7 +98,12 @@ fn install_nx1_image(
     semantic: u8,
     srgb: bool,
 ) -> Option<usize> {
-    let stem = file.trim_end_matches(".png");
+    // NX1 images carry their own `nx1_` key. The lookup below is by bare name
+    // across the whole namespace, and NX1 reuses IW4 stems (`weapon_scar_h_col`,
+    // `weapon_m203_col`, ...), so an unprefixed key returns the retail IW4 row
+    // and the gun binds IW4 bytes instead of its own PNG.
+    let stem = format!("nx1_{}", file.trim_end_matches(".png"));
+    let stem = stem.as_str();
     if let Some(at) = global.image_index_by_key(namespace, stem) {
         return Some(at);
     }

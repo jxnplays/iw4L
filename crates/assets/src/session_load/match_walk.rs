@@ -139,6 +139,47 @@ fn nx1_placeholder_image(
     global.images.len() - 1
 }
 
+/// Triangles in IW order versus cast order, judged against the authored normals.
+///
+/// IW4 draws `FrontFace::Cw` with back faces culled. A face is in IW order when
+/// `cross(b - a, c - a)` points away from its vertex normals; cast's own CCW
+/// order points along them. After the reader's swap nearly every face must be
+/// `iw_cw`; a mesh that is mostly `cast_ccw` draws its inside and looks
+/// see-through. This is the only number for that: culling happens on the GPU,
+/// so draw counts are the same either way.
+fn nx1_winding_counts(skel: &asset_model::ModelSkel) -> (usize, usize) {
+    let (mut iw, mut cast) = (0usize, 0usize);
+    for tri in skel.indices.chunks_exact(3) {
+        let at = |i: u32| skel.positions.get(i as usize).copied();
+        let nrm = |i: u32| skel.normals.get(i as usize).copied();
+        let (Some(a), Some(b), Some(c)) = (at(tri[0]), at(tri[1]), at(tri[2])) else {
+            continue;
+        };
+        let (Some(na), Some(nb), Some(nc)) = (nrm(tri[0]), nrm(tri[1]), nrm(tri[2])) else {
+            continue;
+        };
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let g = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        let n = [
+            na[0] + nb[0] + nc[0],
+            na[1] + nb[1] + nc[1],
+            na[2] + nb[2] + nc[2],
+        ];
+        let d = g[0] * n[0] + g[1] * n[1] + g[2] * n[2];
+        if d < 0.0 {
+            iw += 1;
+        } else if d > 0.0 {
+            cast += 1;
+        }
+    }
+    (iw, cast)
+}
+
 /// A material an already-rendering retail viewmodel uses.
 ///
 /// Must both resolve (the FPV draw loop skips surfaces whose material edge is
@@ -153,8 +194,17 @@ fn rendering_donor_material(
     fpv: &asset_model::FpvMeshBuild,
     global: &asset_material::MaterialDefinitions,
 ) -> Option<(usize, String)> {
+    // Every NX1 material row is a clone of this one, so its state bits -- blend,
+    // alpha test -- become the gun's. Taking simply the first FPV material that
+    // resolves can land on a lens, reticle or alpha-tested row, and then the
+    // gun's colour-map alpha (a gloss mask in NX1's maps, not coverage) or the
+    // blend decides visibility. Prefer a row whose state bits agree on Opaque;
+    // fall back to the old first-resolving pick only if none exists.
+    let mut fallback = None;
     for index in 0..fpv.len() {
-        let entry = fpv.get_at(index)?;
+        let Some(entry) = fpv.get_at(index) else {
+            continue;
+        };
         let Some(Some(key)) = entry.material_keys.first() else {
             continue;
         };
@@ -162,10 +212,19 @@ fn rendering_donor_material(
             continue;
         }
         if let Some(authored) = global.material_index_by_key(key) {
-            return Some((authored.order(), key.name.clone()));
+            let order = authored.order();
+            let opaque = global.materials.get(order).is_some_and(|material| {
+                global.agreed_draw_mode(material) == Some(asset_material::MaterialDrawMode::Opaque)
+            });
+            if opaque {
+                return Some((order, key.name.clone()));
+            }
+            if fallback.is_none() {
+                fallback = Some((order, key.name.clone()));
+            }
         }
     }
-    None
+    fallback
 }
 
 fn register_nx1_material(
@@ -360,6 +419,10 @@ fn insert_nx1_cast_meshes(
             skel.bones.len(),
             skel.surface_index_ranges.len()
         ));
+        let (iw_order, cast_order) = nx1_winding_counts(&skel);
+        report.push(format!(
+            "nx1 cast winding: {label} name={name} iw_cw={iw_order} cast_ccw={cast_order}"
+        ));
         // One line per material: what its colour slot ended up pointing at.
         report.append(&mut tex_report);
         // Bounds of the packed positions, in the units the FPV draw uses. A viewmodel
@@ -405,8 +468,12 @@ fn insert_nx1_cast_meshes(
     };
 
     let donor = rendering_donor_material(fpv, defs);
-    if let Some((_, name)) = &donor {
-        report.push(format!("nx1 donor material: reusing `{name}`"));
+    if let Some((order, name)) = &donor {
+        let mode = defs
+            .materials
+            .get(*order)
+            .and_then(|material| defs.agreed_draw_mode(material));
+        report.push(format!("nx1 donor material: reusing `{name}` draw_mode={mode:?}"));
     }
     for (label, name, path) in [
         (
